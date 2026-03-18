@@ -2,7 +2,7 @@
 // TURBINE LOGSHEET PRO - FULL APPLICATION
 // Version: 1.4.0
 // ============================================
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 
 // ============================================
 // CONFIGURATION & CONSTANTS
@@ -42,7 +42,7 @@ const BALANCING_FIELDS = [
     'kegiatanShift'
 ];
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyh3VprXqhZuHk-hOG0giC8M40CfUZPMPinhQg2FrAZgQx2GaTcp2UrZMHZgXXCtiyV/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwoe646gRBt7Bkxr9YkMRvxUe8Q3jr8EsfmR4H_-7-_nRjt9QFWPAqiaNFM5UA-j0Zn/exec";
 
 // Legacy users untuk fallback offline
 const OFFLINE_USERS = {
