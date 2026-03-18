@@ -1,6 +1,6 @@
 /* ============================================
    TURBINE LOGSHEET PRO - MOBILE FIRST CSS
-   Version: 1.2.0 (With Balancing Feature)
+   Version: 1.3.0 (With CT Logsheet Feature)
    ============================================ */
 
 :root {
@@ -11,6 +11,7 @@
     --success: #10b981;
     --warning: #f59e0b;
     --danger: #ef4444;
+    --info: #3b82f6; /* Tambahan untuk CT */
     
     --bg: #0f172a;
     --bg-secondary: #1e293b;
@@ -87,7 +88,9 @@ body {
     flex-direction: column;
 }
 
-#balancingScreen.active {
+#balancingScreen.active,
+#ctAreaListScreen.active,
+#ctParamScreen.active {
     display: block;
 }
 
@@ -638,6 +641,19 @@ body {
     border-left: 4px solid var(--success);
 }
 
+/* Tambahan untuk menu CT - Info style */
+.menu-card.info {
+    border-left: 4px solid var(--info);
+}
+
+.menu-card.info .menu-icon {
+    background: linear-gradient(135deg, var(--info) 0%, #1d4ed8 100%);
+}
+
+.menu-card.danger {
+    border-left: 4px solid var(--danger);
+}
+
 .menu-icon {
     width: 48px;
     height: 48px;
@@ -659,6 +675,10 @@ body {
 
 .menu-card.success .menu-icon {
     background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+}
+
+.menu-card.danger .menu-icon {
+    background: linear-gradient(135deg, var(--danger) 0%, #dc2626 100%);
 }
 
 .menu-content {
@@ -795,6 +815,12 @@ body {
     border-color: var(--primary);
 }
 
+/* Warna border berbeda untuk area item berdasarkan jenis */
+.area-item.has-warning {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.05);
+}
+
 .item-icon,
 .area-icon {
     width: 48px;
@@ -828,6 +854,11 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.area-meta.warning {
+    color: var(--danger);
+    font-weight: 500;
 }
 
 .item-arrow {
@@ -1075,6 +1106,12 @@ body {
     letter-spacing: 0.05em;
 }
 
+/* Warna berbeda untuk CT */
+#ctCurrentAreaName,
+#ctParamScreen .param-area {
+    color: var(--info);
+}
+
 .param-counter {
     padding: var(--xs) var(--md);
     background: var(--bg-secondary);
@@ -1105,6 +1142,12 @@ body {
 .input-box:focus-within {
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+}
+
+/* Focus state untuk CT */
+#ctMainInputWrapper:focus-within {
+    border-color: var(--info);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .input-field {
@@ -1138,6 +1181,12 @@ body {
     display: flex;
     align-items: center;
     white-space: nowrap;
+}
+
+/* Unit styling untuk CT */
+#ctMainInputWrapper .input-unit {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--info);
 }
 
 .reference-box {
@@ -1199,6 +1248,26 @@ body {
 
 .progress-dot.filled {
     background: var(--success);
+}
+
+/* Warna active untuk CT */
+#ctParamScreen .progress-dot.active {
+    background: var(--info);
+}
+
+#ctParamScreen .progress-dot.has-issue {
+    background: var(--danger);
+    animation: pulse 2s infinite;
+}
+
+.progress-dot.has-issue {
+    background: var(--danger) !important;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
 }
 
 .action-bar {
@@ -1386,6 +1455,21 @@ body {
 #eksporMW[data-state="impor"] {
     border-color: var(--warning) !important;
     background: rgba(245, 158, 11, 0.05) !important;
+}
+
+/* Toolbar Buttons Hover Effects */
+.btn-history:hover {
+    background: rgba(59, 130, 246, 0.25) !important;
+    transform: translateY(-2px);
+}
+
+.btn-reset:hover {
+    background: rgba(239, 68, 68, 0.25) !important;
+    transform: translateY(-2px);
+}
+
+.btn-history:active, .btn-reset:active {
+    transform: translateY(0);
 }
 
 /* Responsive */
@@ -1606,6 +1690,16 @@ html {
     animation: slideUp 0.3s ease;
 }
 
+/* Style khusus untuk CT status card */
+#ctParamScreen .status-abnormal-card {
+    background: rgba(59, 130, 246, 0.05);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+#ctParamScreen .status-header {
+    color: var(--info);
+}
+
 .status-header {
     display: flex;
     align-items: center;
@@ -1642,11 +1736,24 @@ html {
     background: rgba(239, 68, 68, 0.1);
 }
 
+/* Hover state untuk CT */
+#ctParamScreen .status-chip:hover {
+    border-color: rgba(59, 130, 246, 0.4);
+    background: rgba(59, 130, 246, 0.1);
+}
+
 .status-chip.active {
     background: rgba(239, 68, 68, 0.2);
     border-color: #ef4444;
     color: #f87171;
     font-weight: 600;
+}
+
+/* Active state untuk CT */
+#ctParamScreen .status-chip.active {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: var(--info);
+    color: var(--info);
 }
 
 .status-chip input {
@@ -1663,6 +1770,11 @@ html {
     border-top: 1px solid rgba(239, 68, 68, 0.1);
 }
 
+/* Note border untuk CT */
+#ctParamScreen .status-note {
+    border-top-color: rgba(59, 130, 246, 0.1);
+}
+
 .status-note input {
     width: 100%;
     padding: 10px 12px;
@@ -1674,9 +1786,20 @@ html {
     outline: none;
 }
 
+/* Input border untuk CT */
+#ctParamScreen .status-note input {
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
 .status-note input:focus {
     border-color: #ef4444;
     box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+/* Input focus untuk CT */
+#ctParamScreen .status-note input:focus {
+    border-color: var(--info);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 /* Indikator di Progress Dot untuk status abnormal */
