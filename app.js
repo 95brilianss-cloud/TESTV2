@@ -3,7 +3,7 @@
 // Version: 1.5.5 (Fixed Sync & Compression)
 // ============================================
 
-const APP_VERSION = '1.5.6';
+const APP_VERSION = '1.5.7';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -311,14 +311,14 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================
-// 5. UTILITY FUNCTIONS & COMPRESSION
+// 5. UTILITY FUNCTIONS & COMPRESSION (FIXED)
 // ============================================
 
 async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSizeMB = 2.5) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         
-        // Timeout 10 detik untuk mencegah hanging
+        // Timeout safety
         const timeout = setTimeout(() => {
             reject(new Error('Timeout loading image'));
         }, 10000);
@@ -328,108 +328,63 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
             
             try {
                 // Validasi dimensi
-                if (!img.width || !img.height || img.width === 0 || img.height === 0) {
+                if (img.width === 0 || img.height === 0) {
                     reject(new Error('Invalid image dimensions'));
                     return;
                 }
                 
-                // Deteksi iOS (Safari sering bermasalah dengan kompresi tinggi)
-                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-                if (isIOS && quality > 0.7) {
-                    quality = 0.7; // Turunkan quality untuk iOS
-                    maxWidth = Math.min(maxWidth, 1024); // Batasi resolusi iOS
-                }
-                
                 const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                if (!ctx) {
-                    reject(new Error('Canvas context not supported'));
-                    return;
-                }
-                
                 let width = img.width;
                 let height = img.height;
                 
-                // Scale down jika terlalu besar
+                // Resize jika terlalu besar
                 if (width > maxWidth) {
                     height = Math.round(height * (maxWidth / width));
                     width = maxWidth;
                 }
                 
-                // Cek memory limit untuk mobile (max 4096px untuk safety)
-                const maxDim = 4096;
-                if (width > maxDim || height > maxDim) {
-                    const ratio = Math.min(maxDim / width, maxDim / height);
-                    width = Math.round(width * ratio);
-                    height = Math.round(height * ratio);
-                }
-                
                 canvas.width = width;
                 canvas.height = height;
+                const ctx = canvas.getContext('2d');
                 
-                // Fill background putih (untuk handle transparansi PNG)
+                if (!ctx) {
+                    reject(new Error('Canvas context not available'));
+                    return;
+                }
+                
+                // Background putih untuk transparansi
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, width, height);
-                
-                // Render gambar
                 ctx.drawImage(img, 0, 0, width, height);
                 
                 // Kompresi dengan iterasi
                 let currentQuality = quality;
-                let compressed;
+                let compressed = canvas.toDataURL('image/jpeg', currentQuality);
                 const maxBytes = maxSizeMB * 1024 * 1024;
+                
                 let attempts = 0;
-                const maxAttempts = 8;
-                
-                do {
-                    try {
-                        compressed = canvas.toDataURL('image/jpeg', currentQuality);
-                    } catch (e) {
-                        // Fallback ke PNG jika JPEG gagal
-                        try {
-                            compressed = canvas.toDataURL('image/png');
-                        } catch (e2) {
-                            reject(new Error('Canvas export failed'));
-                            return;
-                        }
-                    }
-                    
-                    const size = getBase64Size(compressed);
-                    
-                    if (size <= maxBytes || currentQuality <= 0.3) {
-                        break;
-                    }
-                    
+                while (getBase64Size(compressed) > maxBytes && attempts < 5 && currentQuality > 0.3) {
                     currentQuality -= 0.1;
+                    compressed = canvas.toDataURL('image/jpeg', currentQuality);
                     attempts++;
-                    
-                } while (attempts < maxAttempts);
+                }
                 
-                // Final check
-                if (getBase64Size(compressed) > maxBytes * 1.5) { // toleransi 1.5x
-                    reject(new Error('Image too large to compress'));
+                if (getBase64Size(compressed) > maxBytes) {
+                    reject(new Error('Cannot compress below max size'));
                     return;
                 }
                 
                 resolve(compressed);
                 
             } catch (err) {
-                reject(new Error('Compression failed: ' + err.message));
+                reject(err);
             }
         };
         
-        img.onerror = function(e) {
+        img.onerror = () => {
             clearTimeout(timeout);
-            reject(new Error('Failed to load image file'));
+            reject(new Error('Failed to load image'));
         };
-        
-        // Cek validitas base64 string
-        if (!base64Image || !base64Image.startsWith('data:image')) {
-            clearTimeout(timeout);
-            reject(new Error('Invalid image data'));
-            return;
-        }
         
         img.src = base64Image;
     });
@@ -1734,7 +1689,7 @@ function cancelUpload() {
 }
 
 // ============================================
-// 10. LOGSHEET FUNCTIONS (TURBINE)
+// 10. LOGSHEET FUNCTIONS (TURBINE) - FIXED
 // ============================================
 
 function initParamCameraListener() {
@@ -1746,204 +1701,67 @@ function initParamCameraListener() {
 
 async function handleParamPhoto(event) {
     const file = event.target.files[0];
-    
-    // Reset input untuk memungkinkan re-select file yang sama
-    event.target.value = '';
-    
     if (!file) {
         proceedSaveAfterPhoto();
         return;
     }
     
-    // ✅ Validasi 1: Cek tipe file
+    // Validasi tipe file
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    const fileExtension = file.name.split('.').pop().toLowerCase();
-    const validExtensions = ['jpg', 'jpeg', 'png', 'webp'];
-    
-    if (!validTypes.includes(file.type) && !validExtensions.includes(fileExtension)) {
-        showCustomAlert('❌ Format file tidak didukung. Gunakan JPG, PNG, atau WebP.', 'error');
+    if (!validTypes.includes(file.type)) {
+        showCustomAlert('Format file tidak didukung. Gunakan JPG, PNG, atau WebP.', 'error');
+        event.target.value = '';
         return;
     }
     
-    // ✅ Validasi 2: Cek ukuran (max 15MB sebelum kompresi)
     const originalSize = file.size;
-    const maxSizeMB = 15;
     
-    if (originalSize > maxSizeMB * 1024 * 1024) {
-        showCustomAlert(`❌ Ukuran foto terlalu besar (${formatFileSize(originalSize)}). Maksimal ${maxSizeMB}MB.`, 'error');
-        return;
-    }
-    
-    // ✅ Validasi 3: Cek ketersediaan FileReader
-    if (!window.FileReader) {
-        showCustomAlert('❌ Browser tidak mendukung file reading.', 'error');
+    if (originalSize > 10 * 1024 * 1024) {
+        showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(originalSize)}). Maksimal 10MB sebelum kompresi.`, 'error');
+        event.target.value = '';
         return;
     }
     
     const reader = new FileReader();
-    
     reader.onload = async function(e) {
         const base64Photo = e.target.result;
-        
-        // Cek validitas data
-        if (!base64Photo || base64Photo.length < 100) {
-            showCustomAlert('❌ File gambar rusak atau kosong.', 'error');
-            return;
-        }
         
         try {
             showCustomAlert('📸 Mengkompresi foto...', 'info');
             
-            // Coba kompresi utama
-            let compressedPhoto;
-            let compressionMethod = 'standard';
-            
-            try {
-                compressedPhoto = await compressImage(base64Photo, 1280, 0.8, 2.5);
-            } catch (compressionError) {
-                console.warn('Standard compression failed:', compressionError);
-                
-                // 🔄 Fallback 1: Coba dengan parameter lebih rendah
-                showCustomAlert('⚠️ Kompresi standar gagal, mencoba metode alternatif...', 'warning');
-                
-                try {
-                    compressedPhoto = await compressImage(base64Photo, 800, 0.6, 5.0);
-                    compressionMethod = 'low-quality';
-                } catch (secondError) {
-                    // 🔄 Fallback 2: Resize sederhana tanpa kompresi agresif
-                    console.warn('Low quality compression failed, trying simple resize');
-                    compressedPhoto = await simpleResize(base64Photo, 1024);
-                    compressionMethod = 'simple-resize';
-                }
-            }
-            
+            const compressedPhoto = await compressImage(base64Photo, 1280, 0.8, 2.5);
             const compressedSize = getBase64Size(compressedPhoto);
+            
             const fullLabel = AREAS[activeArea][activeIdx];
             
-            // Simpan ke state
             if (!currentInput[activeArea]) currentInput[activeArea] = {};
             
             currentInput[activeArea][fullLabel + '_photo'] = compressedPhoto;
             currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
             currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
-            currentInput[activeArea][fullLabel + '_photoMethod'] = compressionMethod;
             
             localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
             updatePhotoIndicator(true);
             
-            // Hitung rasio kompresi
             const compressRatio = ((1 - (compressedSize / originalSize)) * 100).toFixed(0);
-            const finalSizeMB = (compressedSize / (1024 * 1024)).toFixed(2);
-            
-            showCustomAlert(`✅ Foto berhasil disimpan! (${compressionMethod})\nUkuran: ${finalSizeMB}MB (dikurangi ${compressRatio}%)`, 'success');
+            showCustomAlert(`📸 Foto berhasil disimpan! (Dikurangi ${compressRatio}%)`, 'success');
             
             setTimeout(() => {
                 proceedSaveAfterPhoto();
             }, 500);
             
         } catch (error) {
-            console.error('Photo handling error:', {
-                message: error.message,
-                fileSize: originalSize,
-                fileType: file.type,
-                userAgent: navigator.userAgent
-            });
-            
-            // 🔄 Last Resort: Tanya user mau simpan original?
-            if (confirm('⚠️ Gagal mengkompresi foto.\n\nCoba simpan foto original saja? (Ukuran bisa besar)')) {
-                try {
-                    const fullLabel = AREAS[activeArea][activeIdx];
-                    if (!currentInput[activeArea]) currentInput[activeArea] = {};
-                    
-                    // Limit size untuk original (max 5MB untuk base64)
-                    if (originalSize > 5 * 1024 * 1024) {
-                        showCustomAlert('❌ Foto original terlalu besar (>5MB). Silakan coba foto dengan resolusi lebih rendah.', 'error');
-                        return;
-                    }
-                    
-                    currentInput[activeArea][fullLabel + '_photo'] = base64Photo;
-                    currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
-                    currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
-                    currentInput[activeArea][fullLabel + '_photoMethod'] = 'original';
-                    
-                    localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-                    updatePhotoIndicator(true);
-                    
-                    showCustomAlert('✅ Foto original tersimpan.', 'success');
-                    proceedSaveAfterPhoto();
-                    
-                } catch (finalError) {
-                    showCustomAlert('❌ Gagal menyimpan foto. Coba foto lain atau restart aplikasi.', 'error');
-                }
-            } else {
-                showCustomAlert('❌ Foto dibatalkan. Silakan coba foto lain.', 'error');
-            }
+            console.error('Compression error:', error);
+            showCustomAlert('Gagal mengkompresi foto. Coba foto lain atau gunakan resolusi lebih rendah.', 'error');
+            event.target.value = '';
         }
     };
     
     reader.onerror = function() {
-        showCustomAlert('❌ Gagal membaca file. Coba foto lain.', 'error');
+        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
     };
     
-    reader.onabort = function() {
-        showCustomAlert('❌ Pembacaan file dibatalkan.', 'warning');
-    };
-    
-    // Mulai membaca file
-    try {
-        reader.readAsDataURL(file);
-    } catch (e) {
-        showCustomAlert('❌ Tidak dapat membaca file: ' + e.message, 'error');
-    }
-}
-
-// Helper function untuk resize sederhana (fallback)
-function simpleResize(base64, maxDim = 1024) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
-        
-        img.onload = () => {
-            clearTimeout(timeout);
-            try {
-                const canvas = document.createElement('canvas');
-                let w = img.width, h = img.height;
-                
-                if (w > h && w > maxDim) {
-                    h = Math.round(h * (maxDim / w));
-                    w = maxDim;
-                } else if (h > maxDim) {
-                    w = Math.round(w * (maxDim / h));
-                    h = maxDim;
-                }
-                
-                canvas.width = w;
-                canvas.height = h;
-                const ctx = canvas.getContext('2d');
-                
-                if (!ctx) {
-                    reject(new Error('No canvas context'));
-                    return;
-                }
-                
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, w, h);
-                ctx.drawImage(img, 0, 0, w, h);
-                
-                // Quality 0.9 untuk simple resize
-                resolve(canvas.toDataURL('image/jpeg', 0.9));
-            } catch (e) {
-                reject(e);
-            }
-        };
-        
-        img.onerror = () => {
-            clearTimeout(timeout);
-            reject(new Error('Load failed'));
-        };
-        
-        img.src = base64;
-    });
+    reader.readAsDataURL(file);
 }
 
 function proceedSaveAfterPhoto() {
@@ -2523,8 +2341,6 @@ async function sendToSheet() {
     } catch (error) {
         clearTimeout(autoAbortTimeout);
         console.error('[SendToSheet] Error:', error);
-        
-        progress.error();
         
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
         offlineData.push(finalData);
