@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.4.7';
+const APP_VERSION = '1.4.8';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -34,7 +34,7 @@ const DRAFT_KEYS_CT = {
 };
 
 // URL Google Apps Script Backend
-const GAS_URL = "https://script.google.com/macros/s/AKfycbz722ae6DO1_vroqeefj7wqGLrRKXfspiqMztOSWR5z4vvW8eh38Vdo8glgXTJ1PE0/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzpM7ueIepzWdIDm7yrE6enRwMuRCyeyL6baUUXHZ5XkYwIEvkmU9xWufLNgVnBQmRi/exec";
 
 // Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
@@ -1539,28 +1539,33 @@ async function handleChangePasswordSubmit(e) {
             newPassword: newPassword
         };
         
-        await fetch(GAS_URL, {
+        // HAPUS mode: 'no-cors' agar bisa membaca response
+        const response = await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         
-        // Update cache lokal
-        if (currentUser && currentUser.username) {
+        const result = await response.json();
+        
+        if (result.success) {
+            // Update cache lokal HANYA jika server berhasil
             updatePasswordInCache(currentUser.username, newPassword);
+            
+            showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
+            closeChangePasswordModal();
+            
+            setTimeout(() => {
+                logoutOperator();
+            }, 2000);
+        } else {
+            // Tampilkan error dari server (misal: "Password lama salah")
+            showCPError(result.error || 'Gagal mengubah password');
         }
-        
-        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
-        closeChangePasswordModal();
-        
-        setTimeout(() => {
-            logoutOperator();
-        }, 2000);
         
     } catch (error) {
         console.error('Error changing password:', error);
-        showCPError('Gagal mengubah password. Periksa koneksi.');
+        showCPError('Gagal mengubah password. Periksa koneksi internet.');
     } finally {
         if(submitBtn) {
             submitBtn.textContent = originalText;
