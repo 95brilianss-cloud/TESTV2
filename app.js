@@ -1,18 +1,20 @@
 // ============================================
 // TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.4.2 (With CT Logsheet Feature)
+// Version: 1.4.7 (Fixed Sync & Structure)
 // ============================================
-const APP_VERSION = '1.4.7';
 
 // ============================================
-// CONFIGURATION & CONSTANTS
+// 1. KONFIGURASI & KONSTANTA
 // ============================================
+const APP_VERSION = '1.4.7';
+const APP_NAME = 'Turbine Logsheet Pro';
+
 const AUTH_CONFIG = {
     SESSION_KEY: 'turbine_session',
     USER_KEY: 'turbine_user',
     USERS_CACHE_KEY: 'turbine_users_cache',
-    SESSION_DURATION: 8 * 60 * 60 * 1000,
-    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000
+    SESSION_DURATION: 8 * 60 * 60 * 1000,        // 8 jam
+    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000  // 30 hari
 };
 
 const DRAFT_KEYS = {
@@ -26,12 +28,22 @@ const DRAFT_KEYS = {
     BALANCING_HISTORY: 'balancing_history'
 };
 
-// CT Logsheet Draft Keys
 const DRAFT_KEYS_CT = {
     LOGSHEET: 'draft_ct_logsheet',
     OFFLINE: 'offline_ct_logsheets'
 };
 
+// URL Google Apps Script Backend
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz722ae6DO1_vroqeefj7wqGLrRKXfspiqMztOSWR5z4vvW8eh38Vdo8glgXTJ1PE0/exec";
+
+// Fallback users untuk mode offline (legacy support)
+const OFFLINE_USERS = {
+    'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
+    'operator': { password: 'operator123', role: 'operator', name: 'Operator Shift', department: 'Unit Utilitas 3B' },
+    'utilitas3b': { password: 'pgresik2024', role: 'operator', name: 'Unit Utilitas 3B', department: 'Unit Utilitas 3B' }
+};
+
+// Field configuration untuk Balancing
 const BALANCING_FIELDS = [
     'balancingDate', 'balancingTime',
     'loadMW', 'eksporMW',
@@ -48,28 +60,11 @@ const BALANCING_FIELDS = [
     'kegiatanShift'
 ];
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbz722ae6DO1_vroqeefj7wqGLrRKXfspiqMztOSWR5z4vvW8eh38Vdo8glgXTJ1PE0/exec";
+// ============================================
+// 2. DATA STRUKTUR AREA
+// ============================================
 
-// Legacy users untuk fallback offline
-const OFFLINE_USERS = {
-    'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
-    'operator': { password: 'operator123', role: 'operator', name: 'Operator Shift', department: 'Unit Utilitas 3B' },
-    'utilitas3b': { password: 'pgresik2024', role: 'operator', name: 'Unit Utilitas 3B', department: 'Unit Utilitas 3B' }
-};
-
-const INPUT_TYPES = {
-    PUMP_STATUS: {
-        patterns: ['(A/B)', '(ON/OFF)', '(On/Off)', '(Running/Stop)', '(Remote/Running/Stop)'],
-        options: {
-            '(A/B)': ['A', 'B'],
-            '(ON/OFF)': ['ON', 'OFF'],
-            '(On/Off)': ['On', 'Off'],
-            '(Running/Stop)': ['Running', 'Stop'],
-            '(Remote/Running/Stop)': ['Remote', 'Running', 'Stop']
-        }
-    }
-};
-
+// Struktur Area Turbine Logsheet
 const AREAS = {
     "Steam Inlet Turbine": [
         "MPS Inlet 30-TP-6101 PI-6114 (kg/cm2)", 
@@ -201,9 +196,7 @@ const AREAS = {
     ]
 };
 
-// ============================================
-// CT LOGSHEET CONFIGURATION
-// ============================================
+// Struktur Area CT Logsheet
 const AREAS_CT = {
     "BASIN SA": [
         "D-6511 LEVEL BASIN",
@@ -237,11 +230,24 @@ const AREAS_CT = {
     ]
 };
 
+const INPUT_TYPES = {
+    PUMP_STATUS: {
+        patterns: ['(A/B)', '(ON/OFF)', '(On/Off)', '(Running/Stop)', '(Remote/Running/Stop)'],
+        options: {
+            '(A/B)': ['A', 'B'],
+            '(ON/OFF)': ['ON', 'OFF'],
+            '(On/Off)': ['On', 'Off'],
+            '(Running/Stop)': ['Running', 'Stop'],
+            '(Remote/Running/Stop)': ['Remote', 'Running', 'Stop']
+        }
+    }
+};
+
 // ============================================
-// STATE VARIABLES
+// 3. STATE MANAGEMENT
 // ============================================
 let lastData = {};
-let currentInput = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET)) || {};
+let currentInput = {};
 let activeArea = "";
 let activeIdx = 0;
 let totalParams = 0;
@@ -257,23 +263,43 @@ let currentShift = 3;
 let balancingAutoSaveInterval = null;
 let uploadProgressInterval = null;
 let currentUploadController = null;
+let deferredPrompt = null;
+let installBannerShown = false;
 
 // CT State Variables
 let lastDataCT = {};
-let currentInputCT = JSON.parse(localStorage.getItem(DRAFT_KEYS_CT.LOGSHEET)) || {};
+let currentInputCT = {};
 let activeAreaCT = "";
 let activeIdxCT = 0;
 let totalParamsCT = 0;
 let currentInputTypeCT = 'text';
 
 // ============================================
-// SERVICE WORKER
+// 4. INITIALIZATION & SERVICE WORKER
 // ============================================
+
+// Inisialisasi data dari localStorage
+function initState() {
+    try {
+        const savedDraft = localStorage.getItem(DRAFT_KEYS.LOGSHEET);
+        if (savedDraft) currentInput = JSON.parse(savedDraft);
+        
+        const savedCTDraft = localStorage.getItem(DRAFT_KEYS_CT.LOGSHEET);
+        if (savedCTDraft) currentInputCT = JSON.parse(savedCTDraft);
+        
+        totalParams = Object.values(AREAS).reduce((acc, arr) => acc + arr.length, 0);
+        totalParamsCT = Object.values(AREAS_CT).reduce((acc, arr) => acc + arr.length, 0);
+    } catch (e) {
+        console.error('Error loading state:', e);
+    }
+}
+
+// Register Service Worker untuk PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
             .then(registration => {
-                console.log('SW registered:', registration);
+                console.log('SW registered:', registration.scope);
                 registration.addEventListener('updatefound', () => {
                     const newWorker = registration.installing;
                     newWorker.addEventListener('statechange', () => {
@@ -283,7 +309,7 @@ if ('serviceWorker' in navigator) {
                     });
                 });
             })
-            .catch(err => console.log('SW registration failed:', err));
+            .catch(err => console.error('SW registration failed:', err));
             
         navigator.serviceWorker.addEventListener('message', event => {
             if (event.data?.type === 'VERSION_CHECK' && event.data.version !== APP_VERSION) {
@@ -294,7 +320,126 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================
-// USER AUTHENTICATION SYSTEM
+// 5. UTILITY FUNCTIONS
+// ============================================
+
+function showUpdateAlert() {
+    const updateAlert = document.getElementById('updateAlert');
+    if (updateAlert) updateAlert.classList.remove('hidden');
+}
+
+function applyUpdate() {
+    if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+    }
+    window.location.reload();
+}
+
+function showCustomAlert(msg, type = 'success') {
+    const customAlert = document.getElementById('customAlert');
+    const alertContent = document.getElementById('alertContent');
+    const alertTitle = document.getElementById('alertTitle');
+    const alertMessage = document.getElementById('alertMessage');
+    const alertIconWrapper = document.getElementById('alertIconWrapper');
+    
+    if (!customAlert || !alertContent || !alertTitle || !alertMessage || !alertIconWrapper) {
+        console.error('Alert elements not found');
+        alert(msg);
+        return;
+    }
+    
+    if (autoCloseTimer) {
+        clearTimeout(autoCloseTimer);
+        autoCloseTimer = null;
+    }
+    
+    const titleMap = {
+        'success': 'Berhasil',
+        'error': 'Error',
+        'warning': 'Peringatan',
+        'info': 'Informasi'
+    };
+    
+    alertTitle.textContent = titleMap[type] || 'Informasi';
+    alertMessage.innerText = msg;
+    alertContent.className = 'alert-content ' + type;
+    
+    // Set icon berdasarkan tipe
+    const icons = {
+        success: `<div class="alert-icon-bg"></div><svg class="alert-icon-svg" viewBox="0 0 52 52"><circle cx="26" cy="26" r="25"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>`,
+        error: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #ef4444"><circle cx="26" cy="26" r="25"/><path d="M16 16 L36 36 M36 16 L16 36"/></svg>`,
+        warning: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #f59e0b"><circle cx="26" cy="26" r="25"/><path d="M26 10 L26 30 M26 34 L26 38"/></svg>`,
+        info: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #3b82f6"><circle cx="26" cy="26" r="25"/><path d="M26 10 L26 30 M26 34 L26 36"/></svg>`
+    };
+    
+    alertIconWrapper.innerHTML = icons[type] || icons.info;
+    customAlert.classList.remove('hidden');
+    
+    if (type === 'success' || type === 'info') {
+        autoCloseTimer = setTimeout(() => {
+            if (!customAlert.classList.contains('hidden')) closeAlert();
+        }, 3000);
+    }
+}
+
+function closeAlert() {
+    const customAlert = document.getElementById('customAlert');
+    if (customAlert) customAlert.classList.add('hidden');
+    if (autoCloseTimer) {
+        clearTimeout(autoCloseTimer);
+        autoCloseTimer = null;
+    }
+}
+
+function navigateTo(screenId) {
+    const protectedScreens = ['homeScreen', 'areaListScreen', 'paramScreen', 'tpmScreen', 'tpmInputScreen', 'balancingScreen', 'ctAreaListScreen', 'ctParamScreen'];
+    
+    if (protectedScreens.includes(screenId) && !requireAuth()) {
+        return;
+    }
+    
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    
+    const targetScreen = document.getElementById(screenId);
+    if (targetScreen) {
+        targetScreen.classList.add('active');
+        window.scrollTo(0, 0);
+        
+        // Screen-specific initialization
+        if (screenId === 'homeScreen') {
+            loadUserStats();
+            setTimeout(() => {
+                addAdminButton();           
+                addChangePasswordButton();  
+            }, 100);
+        } else if (screenId === 'areaListScreen') {
+            fetchLastData();
+            updateOverallProgress();
+        } else if (screenId === 'balancingScreen') {
+            initBalancingScreen();
+        } else if (screenId === 'ctAreaListScreen') {
+            fetchLastDataCT();
+            updateCTOverallProgress();
+        }
+    }
+}
+
+function requireAuth() {
+    if (!isAuthenticated || !isSessionValid(getSession())) {
+        clearSession();
+        showLoginScreen();
+        showCustomAlert('Sesi Anda telah berakhir. Silakan login kembali.', 'error');
+        return false;
+    }
+    return true;
+}
+
+function isAdmin() {
+    return currentUser && currentUser.role === 'admin';
+}
+
+// ============================================
+// 6. AUTHENTICATION SYSTEM
 // ============================================
 
 function initAuth() {
@@ -317,10 +462,64 @@ function initAuth() {
     loadUsersCache();
 }
 
+function isSessionValid(session) {
+    if (!session || !session.expiresAt) return false;
+    return Date.now() < session.expiresAt;
+}
+
+function saveSession(user, rememberMe = false) {
+    const duration = rememberMe ? AUTH_CONFIG.REMEMBER_ME_DURATION : AUTH_CONFIG.SESSION_DURATION;
+    const session = {
+        user: user,
+        loginTime: Date.now(),
+        expiresAt: Date.now() + duration,
+        rememberMe: rememberMe
+    };
+    
+    try {
+        localStorage.setItem(AUTH_CONFIG.SESSION_KEY, JSON.stringify(session));
+    } catch (e) {
+        console.error('Error saving session:', e);
+    }
+}
+
+function getSession() {
+    try {
+        const sessionData = localStorage.getItem(AUTH_CONFIG.SESSION_KEY);
+        return sessionData ? JSON.parse(sessionData) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function clearSession() {
+    localStorage.removeItem(AUTH_CONFIG.SESSION_KEY);
+    localStorage.removeItem(AUTH_CONFIG.USER_KEY);
+}
+
+function showLoginScreen() {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const loginScreen = document.getElementById('loginScreen');
+    if (loginScreen) loginScreen.classList.add('active');
+    
+    const savedUser = localStorage.getItem(AUTH_CONFIG.USER_KEY);
+    if (savedUser) {
+        try {
+            const user = JSON.parse(savedUser);
+            const usernameInput = document.getElementById('operatorUsername');
+            if (usernameInput && user.username) {
+                usernameInput.value = user.username;
+                document.getElementById('operatorPassword')?.focus();
+            }
+        } catch (e) {
+            console.error('Error parsing saved user:', e);
+        }
+    }
+}
+
 async function loginOperator() {
     const usernameInput = document.getElementById('operatorUsername');
     const passwordInput = document.getElementById('operatorPassword');
-    const errorMsg = document.getElementById('loginError');
     const loginBtn = document.querySelector('#loginScreen .btn-primary');
     
     if (!usernameInput || !passwordInput) return;
@@ -349,7 +548,6 @@ async function loginOperator() {
             
             if (result.success) {
                 onlineSuccess = true;
-                // Simpan ke cache untuk offline
                 updateUserCache(username, password, result.user);
                 handleLoginSuccess(result.user, username, password, false);
                 return;
@@ -364,7 +562,7 @@ async function loginOperator() {
     
     if (offlineResult.success) {
         handleLoginSuccess(offlineResult.user, username, password, true);
-        showCustomAlert('Login offline berhasil! (Mode Local)', navigator.onLine ? 'warning' : 'info');
+        showCustomAlert(navigator.onLine ? 'Login offline berhasil! (Mode Local)' : 'Login offline (tidak ada koneksi)', navigator.onLine ? 'warning' : 'info');
     } else {
         showLoginError(offlineResult.error || 'Login gagal. Periksa koneksi atau username/password.');
         if (loginBtn) {
@@ -373,25 +571,8 @@ async function loginOperator() {
         }
     }
 }
-    } catch (error) {
-        console.error('Login error:', error);
-        
-        const offlineResult = validateUserOffline(username, password);
-        
-        if (offlineResult.success) {
-            handleLoginSuccess(offlineResult.user, username, password, true);
-            showCustomAlert('Login offline (tidak ada koneksi)', 'warning');
-        } else {
-            showLoginError('Gagal terhubung ke server. Periksa koneksi internet.');
-            if (loginBtn) {
-                loginBtn.disabled = false;
-                loginBtn.innerHTML = '<span>🔓 Masuk</span>';
-            }
-        }
-    }
-}
 
-async function validateUserOnline(username, password) {
+function validateUserOnline(username, password) {
     return new Promise((resolve, reject) => {
         const callbackName = 'loginCallback_' + Date.now();
         const timeout = setTimeout(() => {
@@ -400,7 +581,7 @@ async function validateUserOnline(username, password) {
         
         window[callbackName] = (response) => {
             clearTimeout(timeout);
-            delete window[callbackName];
+            cleanupJSONP(callbackName);
             resolve(response);
         };
         
@@ -409,6 +590,7 @@ async function validateUserOnline(username, password) {
         
         script.onerror = () => {
             clearTimeout(timeout);
+            cleanupJSONP(callbackName);
             reject(new Error('Network error'));
         };
         
@@ -480,25 +662,52 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
     }
     
     const loginBtn = document.querySelector('#loginScreen .btn-primary');
-    if (loginBtn) {
-        loginBtn.innerHTML = '<span>✓ Berhasil!</span>';
-    }
+    if (loginBtn) loginBtn.innerHTML = '<span>✓ Berhasil!</span>';
     
     showCustomAlert(`Selamat datang, ${userData.name}!`, 'success');
     
     setTimeout(() => {
         updateUIForAuthenticatedUser();
         navigateTo('homeScreen');
-        loadUserStats();
         
         if (loginBtn) {
             loginBtn.disabled = false;
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
         
-        const passwordInput = document.getElementById('operatorPassword');
         if (passwordInput) passwordInput.value = '';
+        
+        // Trigger sync untuk admin setelah login berhasil
+        if (!isOffline && userData.role === 'admin') {
+            setTimeout(syncUsersForOffline, 2000);
+        }
     }, 800);
+}
+
+function logoutOperator() {
+    if (confirm('Apakah Anda yakin ingin keluar?')) {
+        if (Object.keys(currentInput).length > 0) {
+            localStorage.setItem(DRAFT_KEYS.LOGSHEET_BACKUP, JSON.stringify(currentInput));
+        }
+        
+        clearSession();
+        currentUser = null;
+        isAuthenticated = false;
+        
+        const usernameInput = document.getElementById('operatorUsername');
+        const passwordInput = document.getElementById('operatorPassword');
+        if (usernameInput) usernameInput.value = '';
+        if (passwordInput) passwordInput.value = '';
+        
+        const adminBtn = document.getElementById('adminPanelBtn');
+        if (adminBtn) adminBtn.remove();
+        
+        const cpBtn = document.getElementById('changePasswordBtn');
+        if (cpBtn) cpBtn.remove();
+        
+        showLoginScreen();
+        showCustomAlert('Anda telah keluar dari sistem.', 'success');
+    }
 }
 
 function updateUserCache(username, password, userData) {
@@ -507,7 +716,7 @@ function updateUserCache(username, password, userData) {
         
         cache[username.toLowerCase()] = {
             username: userData.username || username,
-            password: password, // Simpan plaintext untuk offline login
+            password: password,
             role: userData.role || 'operator',
             name: userData.name || username,
             department: userData.department || 'Unit Utilitas 3B',
@@ -532,64 +741,6 @@ function loadUsersCache() {
     } catch (e) {
         return null;
     }
-}
-
-function logoutOperator() {
-    if (confirm('Apakah Anda yakin ingin keluar?')) {
-        if (Object.keys(currentInput).length > 0) {
-            localStorage.setItem(DRAFT_KEYS.LOGSHEET_BACKUP, JSON.stringify(currentInput));
-        }
-        
-        clearSession();
-        currentUser = null;
-        isAuthenticated = false;
-        
-        const usernameInput = document.getElementById('operatorUsername');
-        const passwordInput = document.getElementById('operatorPassword');
-        if (usernameInput) usernameInput.value = '';
-        if (passwordInput) passwordInput.value = '';
-        
-        const adminBtn = document.getElementById('adminPanelBtn');
-        if (adminBtn) adminBtn.remove();
-        
-        showLoginScreen();
-        showCustomAlert('Anda telah keluar dari sistem.', 'success');
-    }
-}
-
-function isSessionValid(session) {
-    if (!session || !session.expiresAt) return false;
-    return Date.now() < session.expiresAt;
-}
-
-function saveSession(user, rememberMe = false) {
-    const duration = rememberMe ? AUTH_CONFIG.REMEMBER_ME_DURATION : AUTH_CONFIG.SESSION_DURATION;
-    const session = {
-        user: user,
-        loginTime: Date.now(),
-        expiresAt: Date.now() + duration,
-        rememberMe: rememberMe
-    };
-    
-    try {
-        localStorage.setItem(AUTH_CONFIG.SESSION_KEY, JSON.stringify(session));
-    } catch (e) {
-        console.error('Error saving session:', e);
-    }
-}
-
-function getSession() {
-    try {
-        const sessionData = localStorage.getItem(AUTH_CONFIG.SESSION_KEY);
-        return sessionData ? JSON.parse(sessionData) : null;
-    } catch (e) {
-        return null;
-    }
-}
-
-function clearSession() {
-    localStorage.removeItem(AUTH_CONFIG.SESSION_KEY);
-    localStorage.removeItem(AUTH_CONFIG.USER_KEY);
 }
 
 function showLoginError(message) {
@@ -632,14 +783,9 @@ function updateUIForAuthenticatedUser() {
     if (!currentUser) return;
     
     const userElements = [
-        'displayUserName',
-        'tpmHeaderUser',
-        'tpmInputUser',
-        'areaListUser',
-        'paramUser',
-        'balancingUser',
-        'ctAreaListUser',
-        'ctParamUser'
+        'displayUserName', 'tpmHeaderUser', 'tpmInputUser', 
+        'areaListUser', 'paramUser', 'balancingUser', 
+        'ctAreaListUser', 'ctParamUser'
     ];
     
     userElements.forEach(id => {
@@ -660,48 +806,27 @@ function updateUIForAuthenticatedUser() {
     }
 }
 
-function requireAuth() {
-    if (!isAuthenticated || !isSessionValid(getSession())) {
-        clearSession();
-        showLoginScreen();
-        showCustomAlert('Sesi Anda telah berakhir. Silakan login kembali.', 'error');
-        return false;
-    }
-    return true;
-}
-
-function showLoginScreen() {
-    document.querySelectorAll('.screen').forEach(s => {
-        s.classList.remove('active');
-    });
+function togglePasswordVisibility() {
+    const passwordInput = document.getElementById('operatorPassword');
+    const eyeIcon = document.getElementById('eyeIcon');
     
-    const loginScreen = document.getElementById('loginScreen');
-    if (loginScreen) {
-        loginScreen.classList.add('active');
-    }
+    if (!passwordInput) return;
     
-    const savedUser = localStorage.getItem(AUTH_CONFIG.USER_KEY);
-    if (savedUser) {
-        try {
-            const user = JSON.parse(savedUser);
-            const usernameInput = document.getElementById('operatorUsername');
-            if (usernameInput && user.username) {
-                usernameInput.value = user.username;
-                const passwordInput = document.getElementById('operatorPassword');
-                if (passwordInput) passwordInput.focus();
-            }
-        } catch (e) {
-            console.error('Error parsing saved user:', e);
+    if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        if (eyeIcon) {
+            eyeIcon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+        }
+    } else {
+        passwordInput.type = 'password';
+        if (eyeIcon) {
+            eyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
         }
     }
 }
 
-function isAdmin() {
-    return currentUser && currentUser.role === 'admin';
-}
-
 // ============================================
-// USER MANAGEMENT (ADMIN ONLY)
+// 7. USER MANAGEMENT (ADMIN ONLY)
 // ============================================
 
 function addAdminButton() {
@@ -733,6 +858,33 @@ function addAdminButton() {
     `;
     
     menuGrid.appendChild(adminCard);
+}
+
+function addChangePasswordButton() {
+    const menuGrid = document.querySelector('.menu-grid');
+    if (!menuGrid || document.getElementById('changePasswordBtn')) return;
+    
+    const btn = document.createElement('div');
+    btn.id = 'changePasswordBtn';
+    btn.className = 'menu-card';
+    btn.style.cssText = 'border-left: 4px solid #f59e0b; cursor: pointer; margin-top: 12px;';
+    btn.onclick = showChangePasswordModal;
+    
+    btn.innerHTML = `
+        <div class="menu-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                <circle cx="12" cy="16" r="1"/>
+            </svg>
+        </div>
+        <div class="menu-content">
+            <h3>Ganti Password</h3>
+            <p>Ubah password akun Anda</p>
+        </div>
+    `;
+    
+    menuGrid.appendChild(btn);
 }
 
 function showUserManagement() {
@@ -828,11 +980,14 @@ function fetchUsersFromServer() {
         }
         
         const callbackName = 'usersCallback_' + Date.now();
-        const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+        const timeout = setTimeout(() => {
+            cleanupJSONP(callbackName);
+            reject(new Error('Timeout'));
+        }, 10000);
         
         window[callbackName] = (response) => {
             clearTimeout(timeout);
-            delete window[callbackName];
+            cleanupJSONP(callbackName);
             resolve(response);
         };
         
@@ -841,6 +996,7 @@ function fetchUsersFromServer() {
         
         script.onerror = () => {
             clearTimeout(timeout);
+            cleanupJSONP(callbackName);
             reject(new Error('Network error'));
         };
         
@@ -852,23 +1008,13 @@ function renderUserList(users) {
     const container = document.getElementById('userListContainer');
     if (!container) return;
     
-    // Filter out invalid users
-    const validUsers = users.filter(user => {
-        const isValid = user && user.username && typeof user.username === 'string';
-        if (!isValid) {
-            console.warn('Invalid user data:', user);
-        }
-        return isValid;
-    });
+    const validUsers = users.filter(user => user && user.username && typeof user.username === 'string');
     
     if (validUsers.length === 0) {
         container.innerHTML = `
             <div style="text-align: center; padding: 40px; color: #ef4444;">
                 ❌ Tidak ada data user valid<br>
-                <small style="color: #64748b;">Pastikan sheet USERS memiliki kolom: Username, Password, Role, Name, Department, Status</small><br><br>
-                <button onclick="showAddUserForm()" style="padding: 12px 24px; background: #10b981; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                    ➕ Tambah User Manual
-                </button>
+                <small style="color: #64748b;">Pastikan sheet USERS memiliki kolom yang benar</small>
             </div>
         `;
         return;
@@ -925,6 +1071,7 @@ function renderUserList(users) {
     html += '</div>';
     container.innerHTML = html;
 }
+
 function updateUsersCache(usersArray) {
     try {
         let cache = loadUsersCache() || {};
@@ -933,7 +1080,7 @@ function updateUsersCache(usersArray) {
             if (user && user.username) {
                 cache[user.username.toLowerCase()] = {
                     username: user.username,
-                    password: user.password || '', // Pastikan password tersimpan
+                    password: user.password || '',
                     role: user.role || 'operator',
                     name: user.name || user.username,
                     department: user.department || 'Unit Utilitas 3B',
@@ -1157,7 +1304,287 @@ async function deleteUser(username) {
 }
 
 // ============================================
-// UPLOAD PROGRESS MANAGER
+// 8. SYNC & OFFLINE SUPPORT
+// ============================================
+
+/**
+ * Sinkronisasi data users untuk mode offline
+ * Hanya dijalankan untuk admin saat login online berhasil
+ */
+async function syncUsersForOffline() {
+    // Validasi kondisi
+    if (!navigator.onLine) {
+        console.log('Sync skipped: Device is offline');
+        return;
+    }
+    
+    if (!currentUser) {
+        console.log('Sync skipped: No authenticated user');
+        return;
+    }
+    
+    if (currentUser.role !== 'admin') {
+        console.log('Sync skipped: User is not admin');
+        return;
+    }
+    
+    console.log('[SYNC] Starting offline users sync for admin...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 detik timeout
+    
+    try {
+        const callbackName = 'syncUsersCallback_' + Date.now();
+        
+        const result = await new Promise((resolve, reject) => {
+            // Cleanup function
+            const cleanup = () => {
+                clearTimeout(timeoutId);
+                if (window[callbackName]) delete window[callbackName];
+            };
+            
+            // Setup callback
+            window[callbackName] = (response) => {
+                cleanup();
+                if (response && response.success && Array.isArray(response.users)) {
+                    resolve(response);
+                } else {
+                    reject(new Error(response?.error || 'Invalid response format'));
+                }
+            };
+            
+            // Create script tag
+            const script = document.createElement('script');
+            script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
+            
+            script.onerror = () => {
+                cleanup();
+                reject(new Error('Failed to load script'));
+            };
+            
+            // Abort handling
+            controller.signal.addEventListener('abort', () => {
+                cleanup();
+                reject(new Error('Sync aborted'));
+            });
+            
+            document.body.appendChild(script);
+            
+            // Auto cleanup script DOM after load
+            script.onload = () => {
+                setTimeout(() => {
+                    if (script.parentNode) script.remove();
+                }, 2000);
+            };
+        });
+        
+        // Update cache dengan data fresh dari server
+        if (result.users.length > 0) {
+            updateUsersCache(result.users);
+            console.log(`[SYNC] Success: ${result.users.length} users cached for offline mode`);
+            
+            // Optional: Silent notification (bisa diaktifkan jika perlu)
+            // showCustomAlert(`✓ ${result.users.length} users synced`, 'success');
+        } else {
+            console.log('[SYNC] No users returned from server');
+        }
+        
+    } catch (error) {
+        console.error('[SYNC] Failed:', error.message);
+        // Tidak perlu alert agar tidak ganggu UX, cache lama masih valid
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+/**
+ * Helper untuk cleanup JSONP callback dan script tags
+ */
+function cleanupJSONP(callbackName) {
+    // Hapus global callback
+    if (window[callbackName]) {
+        try {
+            delete window[callbackName];
+        } catch (e) {
+            window[callbackName] = undefined;
+        }
+    }
+    
+    // Hapus script tag yang terkait (best effort)
+    const scripts = document.querySelectorAll('script');
+    scripts.forEach(script => {
+        if (script.src && script.src.includes('callback=' + callbackName)) {
+            if (script.parentNode) script.remove();
+        }
+    });
+}
+
+// ============================================
+// 9. CHANGE PASSWORD FUNCTIONS
+// ============================================
+
+function showChangePasswordModal() {
+    if (!currentUser) {
+        showCustomAlert('Silakan login terlebih dahulu', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('changePasswordModal');
+    const usernameSpan = document.getElementById('cpUsername');
+    const oldPasswordGroup = document.getElementById('oldPasswordGroup');
+    const form = document.getElementById('changePasswordForm');
+    
+    if (usernameSpan) usernameSpan.textContent = currentUser.username;
+    
+    // Admin tidak perlu old password
+    if (currentUser.role === 'admin') {
+        if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
+        const oldPassInput = document.getElementById('cpOldPassword');
+        if(oldPassInput) oldPassInput.removeAttribute('required');
+    } else {
+        if (oldPasswordGroup) oldPasswordGroup.style.display = 'block';
+        const oldPassInput = document.getElementById('cpOldPassword');
+        if(oldPassInput) oldPassInput.setAttribute('required', 'true');
+    }
+    
+    if(form) form.reset();
+    hideCPError();
+    
+    if (modal) modal.classList.remove('hidden');
+    
+    setTimeout(() => {
+        if (currentUser.role === 'admin') {
+            document.getElementById('cpNewPassword')?.focus();
+        } else {
+            document.getElementById('cpOldPassword')?.focus();
+        }
+    }, 100);
+    
+    if(form) form.onsubmit = handleChangePasswordSubmit;
+}
+
+function closeChangePasswordModal() {
+    const modal = document.getElementById('changePasswordModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function toggleCPVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input || !btn) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🙈';
+    } else {
+        input.type = 'password';
+        btn.textContent = '👁️';
+    }
+}
+
+function showCPError(message) {
+    const errorDiv = document.getElementById('cpError');
+    if (errorDiv) {
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+    }
+}
+
+function hideCPError() {
+    const errorDiv = document.getElementById('cpError');
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+        errorDiv.textContent = '';
+    }
+}
+
+async function handleChangePasswordSubmit(e) {
+    e.preventDefault();
+    hideCPError();
+    
+    if (!currentUser || !currentUser.username) {
+        showCPError('Session tidak valid. Silakan login ulang.');
+        return;
+    }
+    
+    const oldPassword = document.getElementById('cpOldPassword')?.value || '';
+    const newPassword = document.getElementById('cpNewPassword')?.value || '';
+    const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
+    
+    if (newPassword.length < 4) {
+        showCPError('Password baru minimal 4 karakter');
+        return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+        showCPError('Password baru dan konfirmasi tidak cocok');
+        return;
+    }
+    
+    if (currentUser.role !== 'admin' && oldPassword === newPassword) {
+        showCPError('Password baru tidak boleh sama dengan password lama');
+        return;
+    }
+    
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const originalText = submitBtn ? submitBtn.textContent : 'Simpan';
+    if(submitBtn) {
+        submitBtn.textContent = '⏳ Menyimpan...';
+        submitBtn.disabled = true;
+    }
+    
+    try {
+        const payload = {
+            type: 'CHANGE_PASSWORD',
+            username: currentUser.username,
+            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
+            newPassword: newPassword
+        };
+        
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        // Update cache lokal
+        if (currentUser && currentUser.username) {
+            updatePasswordInCache(currentUser.username, newPassword);
+        }
+        
+        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
+        closeChangePasswordModal();
+        
+        setTimeout(() => {
+            logoutOperator();
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Error changing password:', error);
+        showCPError('Gagal mengubah password. Periksa koneksi.');
+    } finally {
+        if(submitBtn) {
+            submitBtn.textContent = originalText;
+            submitBtn.disabled = false;
+        }
+    }
+}
+
+function updatePasswordInCache(username, newPassword) {
+    if (!username) return;
+    
+    const cache = loadUsersCache() || {};
+    const key = String(username).toLowerCase();
+    
+    if (cache[key]) {
+        cache[key].password = newPassword;
+        cache[key].lastSync = new Date().toISOString();
+        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
+        usersCache = cache;
+    }
+}
+
+// ============================================
+// 10. UPLOAD PROGRESS MANAGER
 // ============================================
 
 function showUploadProgress(title = 'Mengupload Data...') {
@@ -1167,11 +1594,11 @@ function showUploadProgress(title = 'Mengupload Data...') {
     const turbine = document.getElementById('uploadTurbine');
     const statusText = document.getElementById('uploadStatusText');
     
-    overlay.classList.remove('hidden', 'success', 'error');
-    percentage.textContent = '0%';
-    ringFill.style.strokeDashoffset = 339.292;
-    turbine.classList.add('spinning');
-    statusText.textContent = title;
+    overlay?.classList.remove('hidden', 'success', 'error');
+    if(percentage) percentage.textContent = '0%';
+    if(ringFill) ringFill.style.strokeDashoffset = 339.292;
+    if(turbine) turbine.classList.add('spinning');
+    if(statusText) statusText.textContent = title;
     
     document.querySelectorAll('.step').forEach((step, idx) => {
         step.classList.remove('active', 'completed');
@@ -1207,7 +1634,6 @@ function showUploadProgress(title = 'Mengupload Data...') {
         }
         
         updateProgressRing(progress);
-        
     }, 100);
     
     return {
@@ -1259,13 +1685,11 @@ function completeUploadProgress() {
     const turbine = document.getElementById('uploadTurbine');
     const statusText = document.getElementById('uploadStatusText');
     
-    if (overlay) overlay.classList.add('success');
-    if (turbine) turbine.classList.remove('spinning');
-    if (statusText) statusText.textContent = '✓ Berhasil!';
+    overlay?.classList.add('success');
+    if(turbine) turbine.classList.remove('spinning');
+    if(statusText) statusText.textContent = '✓ Berhasil!';
     
-    setTimeout(() => {
-        hideUploadProgress();
-    }, 800);
+    setTimeout(() => hideUploadProgress(), 800);
 }
 
 function errorUploadProgress() {
@@ -1276,14 +1700,12 @@ function errorUploadProgress() {
     const statusText = document.getElementById('uploadStatusText');
     const percentage = document.getElementById('progressPercentage');
     
-    if (overlay) overlay.classList.add('error');
-    if (turbine) turbine.classList.remove('spinning');
-    if (statusText) statusText.textContent = '✗ Gagal Mengirim';
-    if (percentage) percentage.textContent = 'Error';
+    overlay?.classList.add('error');
+    if(turbine) turbine.classList.remove('spinning');
+    if(statusText) statusText.textContent = '✗ Gagal Mengirim';
+    if(percentage) percentage.textContent = 'Error';
     
-    setTimeout(() => {
-        hideUploadProgress();
-    }, 1500);
+    setTimeout(() => hideUploadProgress(), 1500);
 }
 
 function hideUploadProgress() {
@@ -1304,264 +1726,34 @@ function cancelUpload() {
 }
 
 // ============================================
-// UI & NAVIGATION FUNCTIONS
-// ============================================
-
-window.addEventListener('DOMContentLoaded', () => {
-    totalParams = Object.values(AREAS).reduce((acc, arr) => acc + arr.length, 0);
-    totalParamsCT = Object.values(AREAS_CT).reduce((acc, arr) => acc + arr.length, 0);
-    
-    const versionDisplay = document.getElementById('versionDisplay');
-    if (versionDisplay) {
-        versionDisplay.textContent = APP_VERSION;
-    }
-    
-    initAuth();
-    setupLoginListeners();
-    setupTPMListeners();
-    initCTLogsheet(); // Init CT Logsheet
-    
-    simulateLoading();
-});
-
-function setupLoginListeners() {
-    const usernameInput = document.getElementById('operatorUsername');
-    const passwordInput = document.getElementById('operatorPassword');
-    
-    if (usernameInput) {
-        usernameInput.addEventListener('input', () => {
-            hideLoginError();
-        });
-        
-        usernameInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                if (passwordInput) passwordInput.focus();
-            }
-        });
-    }
-    
-    if (passwordInput) {
-        passwordInput.addEventListener('input', () => {
-            hideLoginError();
-        });
-        
-        passwordInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                loginOperator();
-            }
-        });
-    }
-}
-
-function setupTPMListeners() {
-    const tpmCamera = document.getElementById('tpmCamera');
-    if (tpmCamera) {
-        tpmCamera.addEventListener('change', handleTPMPhoto);
-    }
-}
-
-function simulateLoading() {
-    let progress = 0;
-    const loaderProgress = document.getElementById('loaderProgress');
-    const interval = setInterval(() => {
-        progress += Math.random() * 30;
-        if (progress >= 100) {
-            progress = 100;
-            clearInterval(interval);
-            setTimeout(() => {
-                const loader = document.getElementById('loader');
-                if (loader) loader.style.display = 'none';
-                
-                if (isAuthenticated) {
-                    renderMenu();
-                }
-            }, 500);
-        }
-        if (loaderProgress) loaderProgress.style.width = progress + '%';
-    }, 300);
-}
-
-function showUpdateAlert() {
-    const updateAlert = document.getElementById('updateAlert');
-    if (updateAlert) updateAlert.classList.remove('hidden');
-}
-
-function applyUpdate() {
-    if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
-    }
-    window.location.reload();
-}
-
-function showCustomAlert(msg, type = 'success') {
-    const alertContent = document.getElementById('alertContent');
-    const alertTitle = document.getElementById('alertTitle');
-    const alertIconWrapper = document.getElementById('alertIconWrapper');
-    const customAlert = document.getElementById('customAlert');
-    
-    if (!customAlert || !alertContent || !alertTitle || !alertIconWrapper) {
-        console.error('Alert elements not found');
-        alert(msg);
-        return;
-    }
-    
-    if (autoCloseTimer) {
-        clearTimeout(autoCloseTimer);
-        autoCloseTimer = null;
-    }
-    
-    const titleMap = {
-        'success': 'Berhasil',
-        'error': 'Error',
-        'warning': 'Peringatan',
-        'info': 'Informasi'
-    };
-    alertTitle.textContent = titleMap[type] || 'Informasi';
-    
-    const alertMessage = document.getElementById('alertMessage');
-    if (alertMessage) alertMessage.innerText = msg;
-    
-    alertContent.className = 'alert-content ' + type;
-    
-    if (type === 'success') {
-        alertIconWrapper.innerHTML = `
-            <div class="alert-icon-bg"></div>
-            <svg class="alert-icon-svg" viewBox="0 0 52 52">
-                <circle cx="26" cy="26" r="25"></circle>
-                <path d="M14.1 27.2l7.1 7.2 16.7-16.8"></path>
-            </svg>
-        `;
-    } else if (type === 'warning') {
-        alertIconWrapper.innerHTML = `
-            <div class="alert-icon-bg" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);"></div>
-            <svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #f59e0b;">
-                <circle cx="26" cy="26" r="25"></circle>
-                <path d="M26 10 L26 30 M26 34 L26 38"></path>
-            </svg>
-        `;
-    } else if (type === 'info') {
-        alertIconWrapper.innerHTML = `
-            <div class="alert-icon-bg" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);"></div>
-            <svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #3b82f6;">
-                <circle cx="26" cy="26" r="25"></circle>
-                <path d="M26 10 L26 30 M26 34 L26 36"/>
-            </svg>
-        `;
-    } else {
-        alertIconWrapper.innerHTML = `
-            <div class="alert-icon-bg" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);"></div>
-            <svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #ef4444;">
-                <circle cx="26" cy="26" r="25"></circle>
-                <path d="M16 16 L36 36 M36 16 L16 36"></path>
-            </svg>
-        `;
-    }
-    
-    customAlert.classList.remove('hidden');
-    
-    if (type === 'success' || type === 'info') {
-        autoCloseTimer = setTimeout(() => {
-            if (!customAlert.classList.contains('hidden')) closeAlert();
-        }, 3000);
-    }
-}
-
-function closeAlert() {
-    const customAlert = document.getElementById('customAlert');
-    if (customAlert) customAlert.classList.add('hidden');
-    if (autoCloseTimer) {
-        clearTimeout(autoCloseTimer);
-        autoCloseTimer = null;
-    }
-}
-
-function navigateTo(screenId) {
-    const protectedScreens = ['homeScreen', 'areaListScreen', 'paramScreen', 'tpmScreen', 'tpmInputScreen', 'balancingScreen', 'ctAreaListScreen', 'ctParamScreen'];
-    if (protectedScreens.includes(screenId) && !requireAuth()) {
-        return;
-    }
-    
-    document.querySelectorAll('.screen').forEach(s => {
-        s.classList.remove('active');
-    });
-    
-    const targetScreen = document.getElementById(screenId);
-    if (targetScreen) {
-        targetScreen.classList.add('active');
-        
-        if (screenId === 'tpmScreen' || screenId === 'tpmInputScreen') {
-            updateTPMUserInfo();
-        }
-        
-        if (screenId === 'areaListScreen') {
-            fetchLastData();
-            updateOverallProgress();
-        } else  if (screenId === 'homeScreen') {
-        loadUserStats();
-        setTimeout(() => {
-            addAdminButton();           
-            addChangePasswordButton();  
-        }, 100);
-        } else if (screenId === 'balancingScreen') {
-            initBalancingScreen();
-        } else if (screenId === 'ctAreaListScreen') {
-            fetchLastDataCT();
-            updateCTOverallProgress();
-        }
-    }
-}
-
-function loadUserStats() {
-    const totalAreas = Object.keys(AREAS).length;
-    let completedAreas = 0;
-    
-    Object.entries(AREAS).forEach(([areaName, params]) => {
-        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
-        if (filled === params.length && filled > 0) completedAreas++;
-    });
-    
-    const statProgress = document.getElementById('statProgress');
-    const statAreas = document.getElementById('statAreas');
-    
-    if (statProgress) {
-        const percent = Math.round((completedAreas / totalAreas) * 100);
-        statProgress.textContent = `${percent}%`;
-    }
-    
-    if (statAreas) {
-        statAreas.textContent = `${completedAreas}/${totalAreas}`;
-    }
-}
-
-// ============================================
-// LOGSHEET FUNCTIONS (TURBINE)
+// 11. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 
 function fetchLastData() {
     updateStatusIndicator(false);
     const timeout = setTimeout(() => renderMenu(), 8000);
     const callbackName = 'jsonp_' + Date.now();
-    const script = document.createElement('script');
     
     window[callbackName] = (data) => {
         clearTimeout(timeout);
         lastData = data;
         updateStatusIndicator(true);
-        delete window[callbackName];
-        script.remove();
+        cleanupJSONP(callbackName);
         renderMenu();
     };
     
+    const script = document.createElement('script');
     script.src = `${GAS_URL}?callback=${callbackName}`;
     script.onerror = () => {
         clearTimeout(timeout);
+        cleanupJSONP(callbackName);
         renderMenu();
     };
     document.body.appendChild(script);
 }
 
 function updateStatusIndicator(isOnline) {
-    console.log('Status:', isOnline ? 'Online' : 'Offline');
+    console.log('System Status:', isOnline ? 'Online' : 'Offline');
 }
 
 function renderMenu() {
@@ -1684,28 +1876,7 @@ function renderProgressDots() {
 }
 
 function jumpToStep(index) {
-    const fullLabel = AREAS[activeArea][activeIdx];
-    const input = document.getElementById('valInput');
-    
-    if (input && input.value.trim()) {
-        if (!currentInput[activeArea]) currentInput[activeArea] = {};
-        
-        const checkedStatus = document.querySelector('input[name="paramStatus"]:checked');
-        const note = document.getElementById('statusNote')?.value || '';
-        let valueToSave = input.value.trim();
-        
-        if (checkedStatus) {
-            if (note) {
-                valueToSave = `${checkedStatus.value}\n${note}`;
-            } else {
-                valueToSave = checkedStatus.value;
-            }
-        }
-        
-        currentInput[activeArea][fullLabel] = valueToSave;
-        localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-    }
-    
+    saveCurrentStep();
     activeIdx = index;
     showStep();
     renderProgressDots();
@@ -1733,137 +1904,6 @@ function getUnit(label) {
 
 function getParamName(label) {
     return label.split(' (')[0];
-}
-
-function handleStatusChange(checkbox) {
-    const chip = checkbox.closest('.status-chip');
-    const noteContainer = document.getElementById('statusNoteContainer');
-    const fullLabel = AREAS[activeArea][activeIdx];
-    const valInput = document.getElementById('valInput');
-    
-    document.querySelectorAll('input[name="paramStatus"]').forEach(cb => {
-        if (cb !== checkbox) {
-            cb.checked = false;
-            cb.closest('.status-chip').classList.remove('active');
-        }
-    });
-    
-    if (checkbox.checked) {
-        chip.classList.add('active');
-        if (noteContainer) noteContainer.style.display = 'block';
-        
-        setTimeout(() => {
-            const noteInput = document.getElementById('statusNote');
-            if (noteInput) noteInput.focus();
-        }, 100);
-        
-        if (checkbox.value === 'NOT_INSTALLED') {
-            if (valInput) {
-                valInput.value = '-';
-                valInput.disabled = true;
-                valInput.style.opacity = '0.5';
-                valInput.style.background = 'rgba(100, 116, 139, 0.2)';
-            }
-        }
-    } else {
-        chip.classList.remove('active');
-        if (noteContainer) noteContainer.style.display = 'none';
-        const noteInput = document.getElementById('statusNote');
-        if (noteInput) noteInput.value = '';
-        
-        if (valInput) {
-            valInput.value = '';
-            valInput.disabled = false;
-            valInput.style.opacity = '1';
-            valInput.style.background = '';
-            valInput.focus();
-        }
-    }
-    
-    saveCurrentStatusToDraft();
-}
-
-function saveCurrentStatusToDraft() {
-    const fullLabel = AREAS[activeArea][activeIdx];
-    const input = document.getElementById('valInput');
-    const checkedStatus = document.querySelector('input[name="paramStatus"]:checked');
-    const note = document.getElementById('statusNote')?.value || '';
-    
-    if (!currentInput[activeArea]) currentInput[activeArea] = {};
-    
-    let valueToSave = '';
-    if (input && input.value.trim()) {
-        valueToSave = input.value.trim();
-    }
-    
-    if (checkedStatus) {
-        if (note) {
-            valueToSave = `${checkedStatus.value}\n${note}`;
-        } else {
-            valueToSave = checkedStatus.value;
-        }
-    }
-    
-    if (valueToSave) {
-        currentInput[activeArea][fullLabel] = valueToSave;
-    } else {
-        delete currentInput[activeArea][fullLabel];
-    }
-    
-    localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-    renderProgressDots();
-}
-
-function loadAbnormalStatus(fullLabel) {
-    document.querySelectorAll('input[name="paramStatus"]').forEach(cb => {
-        cb.checked = false;
-        cb.closest('.status-chip').classList.remove('active');
-    });
-    const noteContainer = document.getElementById('statusNoteContainer');
-    const noteInput = document.getElementById('statusNote');
-    
-    if (noteContainer) noteContainer.style.display = 'none';
-    if (noteInput) noteInput.value = '';
-    
-    const valInput = document.getElementById('valInput');
-    if (valInput) {
-        valInput.disabled = false;
-        valInput.style.opacity = '1';
-        valInput.style.background = '';
-        valInput.value = '';
-    }
-    
-    if (currentInput[activeArea] && currentInput[activeArea][fullLabel]) {
-        const savedValue = currentInput[activeArea][fullLabel];
-        const lines = savedValue.split('\n');
-        const firstLine = lines[0];
-        const secondLine = lines[1] || '';
-        
-        const isStatus = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
-        
-        if (isStatus) {
-            const checkbox = document.querySelector(`input[value="${firstLine}"]`);
-            if (checkbox) {
-                checkbox.checked = true;
-                checkbox.closest('.status-chip').classList.add('active');
-                if (noteContainer) noteContainer.style.display = 'block';
-                if (noteInput) noteInput.value = secondLine;
-                
-                if (firstLine === 'NOT_INSTALLED') {
-                    if (valInput) {
-                        valInput.value = '-';
-                        valInput.disabled = true;
-                        valInput.style.opacity = '0.5';
-                        valInput.style.background = 'rgba(100, 116, 139, 0.2)';
-                    }
-                } else {
-                    if (valInput) valInput.value = '';
-                }
-            }
-        } else {
-            if (valInput) valInput.value = savedValue;
-        }
-    }
 }
 
 function showStep() {
@@ -1963,7 +2003,133 @@ function showStep() {
     }, 100);
 }
 
-function saveStep() {
+function handleStatusChange(checkbox) {
+    const chip = checkbox.closest('.status-chip');
+    const noteContainer = document.getElementById('statusNoteContainer');
+    const valInput = document.getElementById('valInput');
+    
+    document.querySelectorAll('input[name="paramStatus"]').forEach(cb => {
+        if (cb !== checkbox) {
+            cb.checked = false;
+            cb.closest('.status-chip').classList.remove('active');
+        }
+    });
+    
+    if (checkbox.checked) {
+        chip.classList.add('active');
+        if (noteContainer) noteContainer.style.display = 'block';
+        
+        setTimeout(() => {
+            document.getElementById('statusNote')?.focus();
+        }, 100);
+        
+        if (checkbox.value === 'NOT_INSTALLED') {
+            if (valInput) {
+                valInput.value = '-';
+                valInput.disabled = true;
+                valInput.style.opacity = '0.5';
+                valInput.style.background = 'rgba(100, 116, 139, 0.2)';
+            }
+        }
+    } else {
+        chip.classList.remove('active');
+        if (noteContainer) noteContainer.style.display = 'none';
+        const noteInput = document.getElementById('statusNote');
+        if (noteInput) noteInput.value = '';
+        
+        if (valInput) {
+            valInput.value = '';
+            valInput.disabled = false;
+            valInput.style.opacity = '1';
+            valInput.style.background = '';
+            valInput.focus();
+        }
+    }
+    
+    saveCurrentStatusToDraft();
+}
+
+function saveCurrentStatusToDraft() {
+    const fullLabel = AREAS[activeArea][activeIdx];
+    const input = document.getElementById('valInput');
+    const checkedStatus = document.querySelector('input[name="paramStatus"]:checked');
+    const note = document.getElementById('statusNote')?.value || '';
+    
+    if (!currentInput[activeArea]) currentInput[activeArea] = {};
+    
+    let valueToSave = '';
+    if (input && input.value.trim()) {
+        valueToSave = input.value.trim();
+    }
+    
+    if (checkedStatus) {
+        if (note) {
+            valueToSave = `${checkedStatus.value}\n${note}`;
+        } else {
+            valueToSave = checkedStatus.value;
+        }
+    }
+    
+    if (valueToSave) {
+        currentInput[activeArea][fullLabel] = valueToSave;
+    } else {
+        delete currentInput[activeArea][fullLabel];
+    }
+    
+    localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+    renderProgressDots();
+}
+
+function loadAbnormalStatus(fullLabel) {
+    document.querySelectorAll('input[name="paramStatus"]').forEach(cb => {
+        cb.checked = false;
+        cb.closest('.status-chip').classList.remove('active');
+    });
+    
+    const noteContainer = document.getElementById('statusNoteContainer');
+    const noteInput = document.getElementById('statusNote');
+    const valInput = document.getElementById('valInput');
+    
+    if (noteContainer) noteContainer.style.display = 'none';
+    if (noteInput) noteInput.value = '';
+    
+    if (valInput) {
+        valInput.disabled = false;
+        valInput.style.opacity = '1';
+        valInput.style.background = '';
+        valInput.value = '';
+    }
+    
+    if (currentInput[activeArea] && currentInput[activeArea][fullLabel]) {
+        const savedValue = currentInput[activeArea][fullLabel];
+        const lines = savedValue.split('\n');
+        const firstLine = lines[0];
+        const secondLine = lines[1] || '';
+        
+        const isStatus = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
+        
+        if (isStatus) {
+            const checkbox = document.querySelector(`input[value="${firstLine}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+                checkbox.closest('.status-chip').classList.add('active');
+                if (noteContainer) noteContainer.style.display = 'block';
+                if (noteInput) noteInput.value = secondLine;
+                
+                if (firstLine === 'NOT_INSTALLED' && valInput) {
+                    valInput.value = '-';
+                    valInput.disabled = true;
+                    valInput.style.opacity = '0.5';
+                    valInput.style.background = 'rgba(100, 116, 139, 0.2)';
+                }
+            }
+        } else {
+            if (valInput) valInput.value = savedValue;
+        }
+    }
+}
+
+function saveCurrentStep() {
     const input = document.getElementById('valInput');
     const fullLabel = AREAS[activeArea][activeIdx];
     
@@ -1997,6 +2163,10 @@ function saveStep() {
     }
     
     localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+}
+
+function saveStep() {
+    saveCurrentStep();
     
     if (activeIdx < AREAS[activeArea].length - 1) {
         activeIdx++;
@@ -2008,39 +2178,7 @@ function saveStep() {
 }
 
 function goBack() {
-    const fullLabel = AREAS[activeArea][activeIdx];
-    const input = document.getElementById('valInput');
-    
-    if (!currentInput[activeArea]) currentInput[activeArea] = {};
-    
-    let valueToSave = '';
-    if (input && input.value.trim()) {
-        valueToSave = input.value.trim();
-    }
-    
-    const checkedStatus = document.querySelector('input[name="paramStatus"]:checked');
-    const note = document.getElementById('statusNote')?.value || '';
-    
-    if (checkedStatus) {
-        if (checkedStatus.value === 'NOT_INSTALLED') {
-            valueToSave = 'NOT_INSTALLED';
-            if (note) valueToSave += '\n' + note;
-        } else {
-            if (note) {
-                valueToSave = `${checkedStatus.value}\n${note}`;
-            } else {
-                valueToSave = checkedStatus.value;
-            }
-        }
-    }
-    
-    if (valueToSave) {
-        currentInput[activeArea][fullLabel] = valueToSave;
-    } else {
-        delete currentInput[activeArea][fullLabel];
-    }
-    
-    localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+    saveCurrentStep();
     
     if (activeIdx > 0) {
         activeIdx--;
@@ -2082,15 +2220,12 @@ async function sendToSheet() {
         });
         
         progress.complete();
-        
         showCustomAlert('✓ Data berhasil dikirim ke sistem!', 'success');
         
         currentInput = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
         
-        setTimeout(() => {
-            navigateTo('homeScreen');
-        }, 1500);
+        setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
         console.error('Error sending data:', error);
@@ -2107,17 +2242,15 @@ async function sendToSheet() {
 }
 
 // ============================================
-// TPM FUNCTIONS
+// 12. TPM FUNCTIONS
 // ============================================
 
 function updateTPMUserInfo() {
-    if (!currentUser) return;
-    
     const tpmHeaderUser = document.getElementById('tpmHeaderUser');
     const tpmInputUser = document.getElementById('tpmInputUser');
     
-    if (tpmHeaderUser) tpmHeaderUser.textContent = currentUser.name;
-    if (tpmInputUser) tpmInputUser.textContent = currentUser.name;
+    if (tpmHeaderUser) tpmHeaderUser.textContent = currentUser?.name || 'Operator';
+    if (tpmInputUser) tpmInputUser.textContent = currentUser?.name || 'Operator';
 }
 
 function openTPMArea(areaName) {
@@ -2155,17 +2288,15 @@ function resetTPMForm() {
     if (photoSection) photoSection.classList.remove('has-photo');
     
     const notes = document.getElementById('tpmNotes');
-    if (notes) notes.value = '';
-    
     const action = document.getElementById('tpmAction');
+    if (notes) notes.value = '';
     if (action) action.value = '';
     
     resetTPMStatusButtons();
 }
 
 function resetTPMStatusButtons() {
-    const buttons = ['btnNormal', 'btnAbnormal', 'btnOff'];
-    buttons.forEach((id) => {
+    ['btnNormal', 'btnAbnormal', 'btnOff'].forEach((id) => {
         const btn = document.getElementById(id);
         if (btn) btn.className = 'status-btn';
     });
@@ -2297,8 +2428,74 @@ async function submitTPMData() {
 }
 
 // ============================================
-// BALANCING FUNCTIONS
+// 13. BALANCING FUNCTIONS
 // ============================================
+
+function initBalancingScreen() {
+    if (!requireAuth()) return;
+    
+    const balancingUser = document.getElementById('balancingUser');
+    if (balancingUser && currentUser) balancingUser.textContent = currentUser.name;
+    
+    detectShift();
+    
+    const draftData = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING));
+    const hasDraft = draftData !== null;
+    
+    if (hasDraft) {
+        loadBalancingDraft();
+    } else {
+        loadLastBalancingData();
+    }
+    
+    calculateLPBalance();
+    setupBalancingAutoSave();
+    setTimeout(updateDraftStatusIndicator, 100);
+}
+
+function detectShift() {
+    const hour = new Date().getHours();
+    let shift = 3;
+    let shiftText = "Shift 3 (23:00 - 07:00)";
+    
+    if (hour >= 7 && hour < 15) {
+        shift = 1;
+        shiftText = "Shift 1 (07:00 - 15:00)";
+    } else if (hour >= 15 && hour < 23) {
+        shift = 2;
+        shiftText = "Shift 2 (15:00 - 23:00)";
+    }
+    
+    currentShift = shift;
+    
+    const badge = document.getElementById('currentShiftBadge');
+    const info = document.getElementById('balancingShiftInfo');
+    const kegiatanNum = document.getElementById('kegiatanShiftNum');
+    
+    if (badge) badge.textContent = `SHIFT ${shift}`;
+    if (info) info.textContent = `${shiftText} • Auto Save Aktif`;
+    if (kegiatanNum) kegiatanNum.textContent = shift;
+    
+    if (badge) {
+        const colors = [
+            'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+            'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+            'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+        ];
+        badge.style.background = colors[shift - 1];
+    }
+    
+    setDefaultDateTime();
+}
+
+function setDefaultDateTime() {
+    const now = new Date();
+    const dateInput = document.getElementById('balancingDate');
+    const timeInput = document.getElementById('balancingTime');
+    
+    if (dateInput && !dateInput.value) dateInput.value = now.toISOString().split('T')[0];
+    if (timeInput && !timeInput.value) timeInput.value = now.toTimeString().slice(0, 5);
+}
 
 function saveBalancingDraft() {
     try {
@@ -2318,7 +2515,6 @@ function saveBalancingDraft() {
         
         localStorage.setItem(DRAFT_KEYS.BALANCING, JSON.stringify(draftData));
         updateDraftStatusIndicator();
-        
     } catch (e) {
         console.error('Error saving balancing draft:', e);
     }
@@ -2327,7 +2523,6 @@ function saveBalancingDraft() {
 function loadBalancingDraft() {
     try {
         const draftData = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING));
-        
         if (!draftData) return false;
         
         let loadedCount = 0;
@@ -2345,9 +2540,7 @@ function loadBalancingDraft() {
         }
         
         calculateLPBalance();
-        
         return loadedCount > 0;
-        
     } catch (e) {
         console.error('Error loading balancing draft:', e);
         return false;
@@ -2415,67 +2608,6 @@ function updateDraftStatusIndicator() {
     }
 }
 
-function initBalancingScreen() {
-    if (!requireAuth()) return;
-    
-    const balancingUser = document.getElementById('balancingUser');
-    if (balancingUser && currentUser) balancingUser.textContent = currentUser.name;
-    
-    detectShift();
-    
-    const draftData = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING));
-    const hasDraft = draftData !== null;
-    
-    if (hasDraft) {
-        loadBalancingDraft();
-    } else {
-        loadLastBalancingData();
-    }
-    
-    calculateLPBalance();
-    setupBalancingAutoSave();
-    setTimeout(updateDraftStatusIndicator, 100);
-}
-
-function detectShift() {
-    const hour = new Date().getHours();
-    let shift = 3;
-    let shiftText = "Shift 3 (23:00 - 07:00)";
-    
-    if (hour >= 7 && hour < 15) {
-        shift = 1;
-        shiftText = "Shift 1 (07:00 - 15:00)";
-    } else if (hour >= 15 && hour < 23) {
-        shift = 2;
-        shiftText = "Shift 2 (15:00 - 23:00)";
-    }
-    
-    currentShift = shift;
-    
-    const badge = document.getElementById('currentShiftBadge');
-    const info = document.getElementById('balancingShiftInfo');
-    const kegiatanNum = document.getElementById('kegiatanShiftNum');
-    
-    if (badge) badge.textContent = `SHIFT ${shift}`;
-    if (info) info.textContent = `${shiftText} • Auto Save Aktif`;
-    if (kegiatanNum) kegiatanNum.textContent = shift;
-    
-    if (badge) {
-        if (shift === 1) badge.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
-        else if (shift === 2) badge.style.background = 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)';
-        else badge.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
-    }
-}
-
-function setDefaultDateTime() {
-    const now = new Date();
-    const dateInput = document.getElementById('balancingDate');
-    const timeInput = document.getElementById('balancingTime');
-    
-    if (dateInput) dateInput.value = now.toISOString().split('T')[0];
-    if (timeInput) timeInput.value = now.toTimeString().slice(0, 5);
-}
-
 async function loadLastBalancingData(fromSpreadsheet = true) {
     const loader = document.getElementById('loader');
     const loaderText = document.querySelector('.loader-text h3');
@@ -2489,7 +2621,14 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
         
         if (fromSpreadsheet && navigator.onLine) {
             try {
-                const response = await fetch(`${GAS_URL}?action=getLastBalancing&t=${Date.now()}`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                
+                const response = await fetch(`${GAS_URL}?action=getLastBalancing&t=${Date.now()}`, {
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
                 const result = await response.json();
                 
                 if (result.success && result.data) {
@@ -2511,10 +2650,10 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
         
         if (!lastData) {
             setDefaultDateTime();
-            if (loader) loader.style.display = 'none';
             return;
         }
         
+        // Mapping field dari server ke form
         const fieldMapping = {
             'loadMW': lastData['Load_MW'],
             'eksporMW': lastData['Ekspor_Impor_MW'],
@@ -2570,7 +2709,6 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
         }
         
         calculateLPBalance();
-        setDefaultDateTime();
         saveBalancingDraft();
         
         const msg = source === 'spreadsheet' 
@@ -2597,9 +2735,7 @@ function resetBalancingForm() {
     
     BALANCING_FIELDS.forEach(fieldId => {
         const element = document.getElementById(fieldId);
-        if (element) {
-            element.value = '';
-        }
+        if (element) element.value = '';
     });
     
     const selects = ['ss2000Via', 'melterSA2', 'ejectorSteam', 'glandSealSteam'];
@@ -2627,7 +2763,6 @@ function resetBalancingForm() {
     }
     
     calculateLPBalance();
-    
     showCustomAlert('Form berhasil direset! Semua field dikosongkan.', 'success');
 }
 
@@ -2704,17 +2839,13 @@ function calculateLPBalance() {
     
     const konsumsiItems = [
         'stgSteam', 'pa2Steam', 'puri2Steam', 'deaeratorSteam',
-        'dumpCondenser', 'pcv6105'
+        'dumpCondenser', 'pcv6105', 'melterSA2', 'ejectorSteam', 'glandSealSteam'
     ];
     
     let totalKonsumsi = 0;
     konsumsiItems.forEach(id => {
         totalKonsumsi += parseFloat(document.getElementById(id)?.value) || 0;
     });
-    
-    totalKonsumsi += parseFloat(document.getElementById('melterSA2')?.value) || 0;
-    totalKonsumsi += parseFloat(document.getElementById('ejectorSteam')?.value) || 0;
-    totalKonsumsi += parseFloat(document.getElementById('glandSealSteam')?.value) || 0;
     
     const totalDisplay = document.getElementById('totalKonsumsiSteam');
     if (totalDisplay) {
@@ -2940,7 +3071,6 @@ async function submitBalancingData() {
         });
         
         progress.complete();
-        
         showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
         
         let balancingHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING_HISTORY) || '[]');
@@ -2980,39 +3110,27 @@ function toggleSS2000Detail() {
 }
 
 // ============================================
-// CT LOGSHEET FUNCTIONS (NEW)
+// 14. CT LOGSHEET FUNCTIONS
 // ============================================
-
-function initCTLogsheet() {
-    const ctAreaListUser = document.getElementById('ctAreaListUser');
-    const ctParamUser = document.getElementById('ctParamUser');
-    
-    if (ctAreaListUser && currentUser) ctAreaListUser.textContent = currentUser.name;
-    if (ctParamUser && currentUser) ctParamUser.textContent = currentUser.name;
-    
-    fetchLastDataCT();
-    renderCTMenu();
-    updateCTOverallProgress();
-}
 
 function fetchLastDataCT() {
     updateStatusIndicator(false);
     const timeout = setTimeout(() => renderCTMenu(), 8000);
     const callbackName = 'jsonp_ct_' + Date.now();
-    const script = document.createElement('script');
     
     window[callbackName] = (data) => {
         clearTimeout(timeout);
         lastDataCT = data;
         updateStatusIndicator(true);
-        delete window[callbackName];
-        script.remove();
+        cleanupJSONP(callbackName);
         renderCTMenu();
     };
     
+    const script = document.createElement('script');
     script.src = `${GAS_URL}?action=getLastCT&callback=${callbackName}`;
     script.onerror = () => {
         clearTimeout(timeout);
+        cleanupJSONP(callbackName);
         renderCTMenu();
     };
     document.body.appendChild(script);
@@ -3195,7 +3313,6 @@ function getCTParamName(label) {
 function handleCTStatusChange(checkbox) {
     const chip = checkbox.closest('.status-chip');
     const noteContainer = document.getElementById('ctStatusNoteContainer');
-    const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
     const valInput = document.getElementById('ctValInput');
     
     document.querySelectorAll('input[name="ctParamStatus"]').forEach(cb => {
@@ -3210,17 +3327,14 @@ function handleCTStatusChange(checkbox) {
         if (noteContainer) noteContainer.style.display = 'block';
         
         setTimeout(() => {
-            const noteInput = document.getElementById('ctStatusNote');
-            if (noteInput) noteInput.focus();
+            document.getElementById('ctStatusNote')?.focus();
         }, 100);
         
-        if (checkbox.value === 'NOT_INSTALLED') {
-            if (valInput) {
-                valInput.value = '-';
-                valInput.disabled = true;
-                valInput.style.opacity = '0.5';
-                valInput.style.background = 'rgba(100, 116, 139, 0.2)';
-            }
+        if (checkbox.value === 'NOT_INSTALLED' && valInput) {
+            valInput.value = '-';
+            valInput.disabled = true;
+            valInput.style.opacity = '0.5';
+            valInput.style.background = 'rgba(100, 116, 139, 0.2)';
         }
     } else {
         chip.classList.remove('active');
@@ -3276,13 +3390,14 @@ function loadCTAbnormalStatus(fullLabel) {
         cb.checked = false;
         cb.closest('.status-chip').classList.remove('active');
     });
+    
     const noteContainer = document.getElementById('ctStatusNoteContainer');
     const noteInput = document.getElementById('ctStatusNote');
+    const valInput = document.getElementById('ctValInput');
     
     if (noteContainer) noteContainer.style.display = 'none';
     if (noteInput) noteInput.value = '';
     
-    const valInput = document.getElementById('ctValInput');
     if (valInput) {
         valInput.disabled = false;
         valInput.style.opacity = '1';
@@ -3306,15 +3421,11 @@ function loadCTAbnormalStatus(fullLabel) {
                 if (noteContainer) noteContainer.style.display = 'block';
                 if (noteInput) noteInput.value = secondLine;
                 
-                if (firstLine === 'NOT_INSTALLED') {
-                    if (valInput) {
-                        valInput.value = '-';
-                        valInput.disabled = true;
-                        valInput.style.opacity = '0.5';
-                        valInput.style.background = 'rgba(100, 116, 139, 0.2)';
-                    }
-                } else {
-                    if (valInput) valInput.value = '';
+                if (firstLine === 'NOT_INSTALLED' && valInput) {
+                    valInput.value = '-';
+                    valInput.disabled = true;
+                    valInput.style.opacity = '0.5';
+                    valInput.style.background = 'rgba(100, 116, 139, 0.2)';
                 }
             }
         } else {
@@ -3539,15 +3650,12 @@ async function sendCTToSheet() {
         });
         
         progress.complete();
-        
         showCustomAlert('✓ Data CT berhasil dikirim ke sistem!', 'success');
         
         currentInputCT = {};
         localStorage.removeItem(DRAFT_KEYS_CT.LOGSHEET);
         
-        setTimeout(() => {
-            navigateTo('homeScreen');
-        }, 1500);
+        setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
         console.error('Error sending CT data:', error);
@@ -3564,19 +3672,84 @@ async function sendCTToSheet() {
 }
 
 // ============================================
-// PWA INSTALL HANDLER
+// 15. UI & EVENT LISTENERS
 // ============================================
-let deferredPrompt = null;
-let installBannerShown = false;
+
+function setupLoginListeners() {
+    const usernameInput = document.getElementById('operatorUsername');
+    const passwordInput = document.getElementById('operatorPassword');
+    
+    if (usernameInput) {
+        usernameInput.addEventListener('input', hideLoginError);
+        usernameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') passwordInput?.focus();
+        });
+    }
+    
+    if (passwordInput) {
+        passwordInput.addEventListener('input', hideLoginError);
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') loginOperator();
+        });
+    }
+}
+
+function setupTPMListeners() {
+    const tpmCamera = document.getElementById('tpmCamera');
+    if (tpmCamera) {
+        tpmCamera.addEventListener('change', handleTPMPhoto);
+    }
+}
+
+function simulateLoading() {
+    let progress = 0;
+    const loaderProgress = document.getElementById('loaderProgress');
+    const interval = setInterval(() => {
+        progress += Math.random() * 30;
+        if (progress >= 100) {
+            progress = 100;
+            clearInterval(interval);
+            setTimeout(() => {
+                const loader = document.getElementById('loader');
+                if (loader) loader.style.display = 'none';
+            }, 500);
+        }
+        if (loaderProgress) loaderProgress.style.width = progress + '%';
+    }, 300);
+}
+
+function loadUserStats() {
+    const totalAreas = Object.keys(AREAS).length;
+    let completedAreas = 0;
+    
+    Object.entries(AREAS).forEach(([areaName, params]) => {
+        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
+        if (filled === params.length && filled > 0) completedAreas++;
+    });
+    
+    const statProgress = document.getElementById('statProgress');
+    const statAreas = document.getElementById('statAreas');
+    
+    if (statProgress) {
+        const percent = Math.round((completedAreas / totalAreas) * 100);
+        statProgress.textContent = `${percent}%`;
+    }
+    
+    if (statAreas) {
+        statAreas.textContent = `${completedAreas}/${totalAreas}`;
+    }
+}
+
+// ============================================
+// 16. PWA INSTALL HANDLER
+// ============================================
 
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
     
     if (!isAppInstalled() && !installBannerShown) {
-        setTimeout(() => {
-            showCustomInstallBanner();
-        }, 3000);
+        setTimeout(() => showCustomInstallBanner(), 3000);
     }
 });
 
@@ -3624,22 +3797,12 @@ function showCustomInstallBanner() {
                 ⚡
             </div>
             
-            <h3 style="
-                color: #f8fafc;
-                font-size: 1.25rem;
-                font-weight: 700;
-                margin-bottom: 8px;
-            ">
+            <h3 style="color: #f8fafc; font-size: 1.25rem; font-weight: 700; margin-bottom: 8px;">
                 Install Aplikasi
             </h3>
             
-            <p style="
-                color: #94a3b8;
-                font-size: 0.875rem;
-                margin-bottom: 24px;
-                line-height: 1.5;
-            ">
-                Tambahkan Turbine Log ke layar utama untuk akses lebih cepat dan pengalaman seperti aplikasi native.
+            <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 24px; line-height: 1.5;">
+                Tambahkan Turbine Log ke layar utama untuk akses lebih cepat.
             </p>
             
             <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -3653,8 +3816,7 @@ function showCustomInstallBanner() {
                     font-size: 1rem;
                     font-weight: 600;
                     cursor: pointer;
-                    transition: transform 0.2s;
-                " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                ">
                     Install Sekarang
                 </button>
                 
@@ -3667,41 +3829,9 @@ function showCustomInstallBanner() {
                     border-radius: 12px;
                     font-size: 0.9375rem;
                     cursor: pointer;
-                    transition: all 0.2s;
                 ">
                     Nanti Saja
                 </button>
-            </div>
-            
-            <div style="
-                margin-top: 20px;
-                padding-top: 20px;
-                border-top: 1px solid rgba(148, 163, 184, 0.1);
-                display: flex;
-                justify-content: center;
-                gap: 20px;
-                font-size: 0.75rem;
-                color: #64748b;
-            ">
-                <span style="display: flex; align-items: center; gap: 4px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-                    </svg>
-                    Cepat
-                </span>
-                <span style="display: flex; align-items: center; gap: 4px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                    </svg>
-                    Aman
-                </span>
-                <span style="display: flex; align-items: center; gap: 4px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M12 2v20M2 12h20"/>
-                    </svg>
-                    Offline
-                </span>
             </div>
         </div>
         
@@ -3733,15 +3863,12 @@ async function installPWA() {
     }
     
     deferredPrompt.prompt();
-    
     const { outcome } = await deferredPrompt.userChoice;
     
     if (outcome === 'accepted') {
-        console.log('User installed PWA');
         hideCustomInstallBanner();
         showToast('✓ Menginstall aplikasi...', 'success');
     } else {
-        console.log('User dismissed install');
         hideCustomInstallBanner();
     }
     
@@ -3757,6 +3884,10 @@ function isAppInstalled() {
 function showToast(msg, type) {
     console.log(`[${type}] ${msg}`);
 }
+
+// ============================================
+// 17. KEYBOARD SHORTCUTS
+// ============================================
 
 document.addEventListener('keydown', (e) => {
     const paramScreen = document.getElementById('paramScreen');
@@ -3782,251 +3913,20 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ============================================
-// CHANGE PASSWORD FUNCTIONS
+// 18. DOM READY INITIALIZATION
 // ============================================
 
-function showChangePasswordModal() {
-    if (!currentUser) {
-        showCustomAlert('Silakan login terlebih dahulu', 'error');
-        return;
-    }
+window.addEventListener('DOMContentLoaded', () => {
+    initState();
     
-    const modal = document.getElementById('changePasswordModal');
-    const usernameSpan = document.getElementById('cpUsername');
-    const oldPasswordGroup = document.getElementById('oldPasswordGroup');
-    const form = document.getElementById('changePasswordForm');
+    const versionDisplay = document.getElementById('versionDisplay');
+    if (versionDisplay) versionDisplay.textContent = APP_VERSION;
     
-    if (usernameSpan) usernameSpan.textContent = currentUser.username;
+    initAuth();
+    setupLoginListeners();
+    setupTPMListeners();
     
-    // Jika admin, sembunyikan field password lama
-    if (currentUser.role === 'admin') {
-        if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
-        const oldPassInput = document.getElementById('cpOldPassword');
-        if(oldPassInput) oldPassInput.removeAttribute('required');
-    } else {
-        if (oldPasswordGroup) oldPasswordGroup.style.display = 'block';
-        const oldPassInput = document.getElementById('cpOldPassword');
-        if(oldPassInput) oldPassInput.setAttribute('required', 'true');
-    }
+    simulateLoading();
     
-    if(form) form.reset();
-    hideCPError();
-    
-    if (modal) modal.classList.remove('hidden');
-    
-    setTimeout(() => {
-        if (currentUser.role === 'admin') {
-            document.getElementById('cpNewPassword')?.focus();
-        } else {
-            document.getElementById('cpOldPassword')?.focus();
-        }
-    }, 100);
-    
-    if(form) form.onsubmit = handleChangePasswordSubmit;
-}
-
-function closeChangePasswordModal() {
-    const modal = document.getElementById('changePasswordModal');
-    if (modal) modal.classList.add('hidden');
-}
-
-function toggleCPVisibility(inputId, btn) {
-    const input = document.getElementById(inputId);
-    if (!input || !btn) return;
-    if (input.type === 'password') {
-        input.type = 'text';
-        btn.textContent = '🙈';
-    } else {
-        input.type = 'password';
-        btn.textContent = '👁️';
-    }
-}
-
-function showCPError(message) {
-    const errorDiv = document.getElementById('cpError');
-    if (errorDiv) {
-        errorDiv.textContent = message;
-        errorDiv.style.display = 'block';
-    }
-}
-
-function hideCPError() {
-    const errorDiv = document.getElementById('cpError');
-    if (errorDiv) {
-        errorDiv.style.display = 'none';
-        errorDiv.textContent = '';
-    }
-}
-
-async function handleChangePasswordSubmit(e) {
-    e.preventDefault();
-    hideCPError();
-    
-    // Validasi currentUser
-    if (!currentUser || !currentUser.username) {
-        showCPError('Session tidak valid. Silakan login ulang.');
-        return;
-    }
-    
-    const oldPassword = document.getElementById('cpOldPassword')?.value || '';
-    const newPassword = document.getElementById('cpNewPassword')?.value || '';
-    const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
-    
-    if (newPassword.length < 4) {
-        showCPError('Password baru minimal 4 karakter');
-        return;
-    }
-    
-    if (newPassword !== confirmPassword) {
-        showCPError('Password baru dan konfirmasi tidak cocok');
-        return;
-    }
-    
-    if (currentUser.role !== 'admin' && oldPassword === newPassword) {
-        showCPError('Password baru tidak boleh sama dengan password lama');
-        return;
-    }
-    
-    const submitBtn = e.target.querySelector('button[type="submit"]');
-    const originalText = submitBtn ? submitBtn.textContent : 'Simpan';
-    if(submitBtn) {
-        submitBtn.textContent = '⏳ Menyimpan...';
-        submitBtn.disabled = true;
-    }
-    
-    try {
-        const payload = {
-            type: 'CHANGE_PASSWORD',
-            username: currentUser.username,
-            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
-            newPassword: newPassword
-        };
-        
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        // Update cache dengan pengecekan
-        if (currentUser && currentUser.username) {
-            updatePasswordInCache(currentUser.username, newPassword);
-        }
-        
-        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
-        closeChangePasswordModal();
-        
-        setTimeout(() => {
-            logoutOperator();
-        }, 2000);
-        
-    } catch (error) {
-        console.error('Error changing password:', error);
-        showCPError('Gagal mengubah password. Periksa koneksi.');
-    } finally {
-        if(submitBtn) {
-            submitBtn.textContent = originalText;
-            submitBtn.disabled = false;
-        }
-    }
-}
-
-function updatePasswordInCache(username, newPassword) {
-    if (!username) return; // Cek null/undefined
-    
-    const cache = loadUsersCache() || {};
-    const key = String(username).toLowerCase(); // Konversi ke string
-    
-    if (cache[key]) {
-        cache[key].password = newPassword;
-        cache[key].lastSync = new Date().toISOString();
-        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
-    }
-}
-
-function addChangePasswordButton() {
-    const menuGrid = document.querySelector('.menu-grid');
-    if (!menuGrid || document.getElementById('changePasswordBtn')) return;
-    
-    const btn = document.createElement('div');
-    btn.id = 'changePasswordBtn';
-    btn.className = 'menu-card';
-    btn.style.cssText = 'border-left: 4px solid #f59e0b; cursor: pointer; margin-top: 12px;';
-    btn.onclick = showChangePasswordModal;
-    
-    btn.innerHTML = `
-        <div class="menu-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                <circle cx="12" cy="16" r="1"/>
-            </svg>
-        </div>
-        <div class="menu-content">
-            <h3>Ganti Password</h3>
-            <p>Ubah password akun Anda</p>
-        </div>
-        <div class="menu-arrow">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 18l6-6-6-6"/>
-            </svg>
-        </div>
-    `;
-    
-    menuGrid.appendChild(btn);
-}
-
-// Toggle password visibility for login screen
-function togglePasswordVisibility() {
-    const passwordInput = document.getElementById('operatorPassword');
-    const eyeIcon = document.getElementById('eyeIcon');
-    
-    if (!passwordInput) return;
-    
-    if (passwordInput.type === 'password') {
-        passwordInput.type = 'text';
-        if (eyeIcon) {
-            // Eye off icon (crossed)
-            eyeIcon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
-        }
-    } else {
-        passwordInput.type = 'password';
-        if (eyeIcon) {
-            // Eye on icon
-            eyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
-        }
-    }
-}
-
-async function syncUsersForOffline() {
-    if (!navigator.onLine || !currentUser || currentUser.role !== 'admin') return;
-    
-    try {
-        const callbackName = 'syncCallback_' + Date.now();
-        const result = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
-            
-            window[callbackName] = (response) => {
-                clearTimeout(timeout);
-                delete window[callbackName];
-                resolve(response);
-            };
-            
-            const script = document.createElement('script');
-            script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
-            script.onerror = () => {
-                clearTimeout(timeout);
-                reject(new Error('Network error'));
-            };
-            document.body.appendChild(script);
-        });
-        
-        if (result.success && result.users) {
-            updateUsersCache(result.users);
-            console.log('Users synced for offline:', result.users.length);
-        }
-    } catch (e) {
-        console.error('Sync failed:', e);
-    }
-}
+    console.log(`${APP_NAME} v${APP_VERSION} initialized successfully`);
+});
