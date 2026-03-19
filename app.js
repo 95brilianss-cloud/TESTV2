@@ -4030,13 +4030,3 @@ async function syncUsersForOffline() {
         console.error('Sync failed:', e);
     }
 }
-
-// Panggil saat login berhasil
-function handleLoginSuccess(userData, username, password, isOffline = false) {
-    // ... kode existing ...
-    
-    // Jika login online, sync users untuk offline
-    if (!isOffline && userData.role === 'admin') {
-        setTimeout(syncUsersForOffline, 2000);
-    }
-}
