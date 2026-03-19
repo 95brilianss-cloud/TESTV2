@@ -48,7 +48,7 @@ const BALANCING_FIELDS = [
     'kegiatanShift'
 ];
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzv_y2te44MqOlBhAs4_wRQKh4dYl3ip0BI1uha2wNLgu2H2LnB6V3K4svUMinpRmvB/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz722ae6DO1_vroqeefj7wqGLrRKXfspiqMztOSWR5z4vvW8eh38Vdo8glgXTJ1PE0/exec";
 
 // Legacy users untuk fallback offline
 const OFFLINE_USERS = {
