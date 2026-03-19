@@ -1,17 +1,20 @@
 // ============================================
-// TURBINE LOGSHEET PRO - VERSION 1.6.1
-// Feature: Server-side Photo Processing (No Client Compression)
+// TURBINE LOGSHEET PRO - FULL APPLICATION
+// Version: 1.4.7 (Fixed Sync & Structure)
 // ============================================
 
-const APP_VERSION = '1.6.1';
+// ============================================
+// 1. KONFIGURASI & KONSTANTA
+// ============================================
+const APP_VERSION = '1.5.2';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
     SESSION_KEY: 'turbine_session',
     USER_KEY: 'turbine_user',
     USERS_CACHE_KEY: 'turbine_users_cache',
-    SESSION_DURATION: 8 * 60 * 60 * 1000,
-    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000
+    SESSION_DURATION: 8 * 60 * 60 * 1000,        // 8 jam
+    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000  // 30 hari
 };
 
 const DRAFT_KEYS = {
@@ -30,15 +33,17 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-// GAS URL - Server akan menangani kompresi dan upload ke Drive
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzH_r7pPTXgOrtq6LFE71rcudv6rIpFNTzDMg53lzUKaBCZC9foP6EHqmU5PveYXG9J/exec";
+// URL Google Apps Script Backend
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
 
+// Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
     'operator': { password: 'operator123', role: 'operator', name: 'Operator Shift', department: 'Unit Utilitas 3B' },
     'utilitas3b': { password: 'pgresik2024', role: 'operator', name: 'Unit Utilitas 3B', department: 'Unit Utilitas 3B' }
 };
 
+// Field configuration untuk Balancing
 const BALANCING_FIELDS = [
     'balancingDate', 'balancingTime',
     'loadMW', 'eksporMW',
@@ -59,6 +64,7 @@ const BALANCING_FIELDS = [
 // 2. DATA STRUKTUR AREA
 // ============================================
 
+// Struktur Area Turbine Logsheet
 const AREAS = {
     "Steam Inlet Turbine": [
         "MPS Inlet 30-TP-6101 PI-6114 (kg/cm2)", 
@@ -190,6 +196,7 @@ const AREAS = {
     ]
 };
 
+// Struktur Area CT Logsheet
 const AREAS_CT = {
     "BASIN SA": [
         "D-6511 LEVEL BASIN",
@@ -258,10 +265,8 @@ let uploadProgressInterval = null;
 let currentUploadController = null;
 let deferredPrompt = null;
 let installBannerShown = false;
-let pendingSaveAction = null;
-let currentParamPhoto = null;
-let isUploadingPhoto = false;
 
+// CT State Variables
 let lastDataCT = {};
 let currentInputCT = {};
 let activeAreaCT = "";
@@ -270,9 +275,10 @@ let totalParamsCT = 0;
 let currentInputTypeCT = 'text';
 
 // ============================================
-// 4. INITIALIZATION
+// 4. INITIALIZATION & SERVICE WORKER
 // ============================================
 
+// Inisialisasi data dari localStorage
 function initState() {
     try {
         const savedDraft = localStorage.getItem(DRAFT_KEYS.LOGSHEET);
@@ -288,6 +294,7 @@ function initState() {
     }
 }
 
+// Register Service Worker untuk PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
@@ -313,93 +320,8 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================
-// 5. UTILITY FUNCTIONS (COMPRESSION REMOVED)
+// 5. UTILITY FUNCTIONS
 // ============================================
-
-/**
- * Format file size untuk display
- * @param {number} bytes 
- * @returns {string}
- */
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-// Safe Fetch & JSONP
-function safeJSONP(url, callbackName, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-        let isResolved = false;
-        const cleanup = () => {
-            isResolved = true;
-            cleanupJSONP(callbackName);
-            const scripts = document.querySelectorAll('script');
-            scripts.forEach(script => {
-                if (script.src && script.src.includes(`callback=${callbackName}`)) {
-                    if (script.parentNode) script.remove();
-                }
-            });
-        };
-        
-        const timeoutId = setTimeout(() => {
-            if (!isResolved) {
-                cleanup();
-                reject(new Error('JSONP Timeout'));
-            }
-        }, timeoutMs);
-        
-        window[callbackName] = (response) => {
-            if (!isResolved) {
-                cleanup();
-                clearTimeout(timeoutId);
-                resolve(response || { success: true });
-            }
-        };
-        
-        const script = document.createElement('script');
-        script.src = url;
-        script.onerror = () => {
-            if (!isResolved) {
-                cleanup();
-                clearTimeout(timeoutId);
-                reject(new Error('Network error'));
-            }
-        };
-        
-        setTimeout(() => {
-            if (!isResolved) {
-                console.warn(`[SafeJSONP] Emergency cleanup for ${callbackName}`);
-                cleanup();
-                clearTimeout(timeoutId);
-                reject(new Error('Emergency timeout'));
-            }
-        }, timeoutMs + 2000);
-        
-        document.body.appendChild(script);
-    });
-}
-
-function emergencyResetUpload() {
-    console.log('[Emergency] Resetting upload state...');
-    if (uploadProgressInterval) {
-        clearInterval(uploadProgressInterval);
-        uploadProgressInterval = null;
-    }
-    currentUploadController = null;
-    isUploadingPhoto = false;
-    hideUploadProgress();
-    showCustomAlert('Sinkronisasi dihentikan. Silakan coba lagi.', 'warning');
-}
-
-function cleanupJSONP(callbackName) {
-    if (window[callbackName]) {
-        try { delete window[callbackName]; } 
-        catch (e) { window[callbackName] = undefined; }
-    }
-}
 
 function showUpdateAlert() {
     const updateAlert = document.getElementById('updateAlert');
@@ -421,6 +343,7 @@ function showCustomAlert(msg, type = 'success') {
     const alertIconWrapper = document.getElementById('alertIconWrapper');
     
     if (!customAlert || !alertContent || !alertTitle || !alertMessage || !alertIconWrapper) {
+        console.error('Alert elements not found');
         alert(msg);
         return;
     }
@@ -441,6 +364,7 @@ function showCustomAlert(msg, type = 'success') {
     alertMessage.innerText = msg;
     alertContent.className = 'alert-content ' + type;
     
+    // Set icon berdasarkan tipe
     const icons = {
         success: `<div class="alert-icon-bg"></div><svg class="alert-icon-svg" viewBox="0 0 52 52"><circle cx="26" cy="26" r="25"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>`,
         error: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #ef4444"><circle cx="26" cy="26" r="25"/><path d="M16 16 L36 36 M36 16 L16 36"/></svg>`,
@@ -481,6 +405,7 @@ function navigateTo(screenId) {
         targetScreen.classList.add('active');
         window.scrollTo(0, 0);
         
+        // Screen-specific initialization
         if (screenId === 'homeScreen') {
             loadUserStats();
             setTimeout(() => {
@@ -616,14 +541,10 @@ async function loginOperator() {
     
     let onlineSuccess = false;
     
+    // Coba login online dulu
     if (navigator.onLine) {
         try {
-            const callbackName = 'loginCallback_' + Date.now();
-            const result = await safeJSONP(
-                `${GAS_URL}?action=login&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&callback=${callbackName}`,
-                callbackName,
-                10000
-            );
+            const result = await validateUserOnline(username, password);
             
             if (result.success) {
                 onlineSuccess = true;
@@ -636,11 +557,12 @@ async function loginOperator() {
         }
     }
     
+    // Jika online gagal atau offline, coba dari cache/legacy
     const offlineResult = validateUserOffline(username, password);
     
     if (offlineResult.success) {
         handleLoginSuccess(offlineResult.user, username, password, true);
-        showCustomAlert(navigator.onLine ? 'Login offline berhasil!' : 'Login offline (tidak ada koneksi)', navigator.onLine ? 'warning' : 'info');
+        showCustomAlert(navigator.onLine ? 'Login offline berhasil! (Mode Local)' : 'Login offline (tidak ada koneksi)', navigator.onLine ? 'warning' : 'info');
     } else {
         showLoginError(offlineResult.error || 'Login gagal. Periksa koneksi atau username/password.');
         if (loginBtn) {
@@ -648,6 +570,32 @@ async function loginOperator() {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
     }
+}
+
+function validateUserOnline(username, password) {
+    return new Promise((resolve, reject) => {
+        const callbackName = 'loginCallback_' + Date.now();
+        const timeout = setTimeout(() => {
+            reject(new Error('Timeout'));
+        }, 10000);
+        
+        window[callbackName] = (response) => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            resolve(response);
+        };
+        
+        const script = document.createElement('script');
+        script.src = `${GAS_URL}?action=login&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&callback=${callbackName}`;
+        
+        script.onerror = () => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            reject(new Error('Network error'));
+        };
+        
+        document.body.appendChild(script);
+    });
 }
 
 function validateUserOffline(username, password) {
@@ -705,6 +653,7 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
     };
     
     isAuthenticated = true;
+    
     saveSession(currentUser, false);
     localStorage.setItem(AUTH_CONFIG.USER_KEY, JSON.stringify(currentUser));
     
@@ -726,9 +675,11 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
         
+        // PERBAIKAN: Deklarasikan variabel passwordInput sebelum digunakan
         const passwordInput = document.getElementById('operatorPassword');
         if (passwordInput) passwordInput.value = '';
         
+        // Trigger sync untuk admin setelah login berhasil
         if (!isOffline && userData.role === 'admin') {
             setTimeout(syncUsersForOffline, 2000);
         }
@@ -782,9 +733,9 @@ function updateUserCache(username, password, userData) {
         console.error('Error saving cache:', e);
     }
 }
-
 function updatePasswordInCache(username, newPassword) {
     if (!username) return;
+    
     const cache = loadUsersCache() || {};
     const key = String(username).toLowerCase();
     
@@ -796,7 +747,6 @@ function updatePasswordInCache(username, newPassword) {
         console.log('Password updated in cache for:', username);
     }
 }
-
 function loadUsersCache() {
     if (usersCache) return usersCache;
     try {
@@ -891,7 +841,7 @@ function togglePasswordVisibility() {
 }
 
 // ============================================
-// 7. USER MANAGEMENT
+// 7. USER MANAGEMENT (ADMIN ONLY)
 // ============================================
 
 function addAdminButton() {
@@ -910,7 +860,7 @@ function addAdminButton() {
     adminCard.innerHTML = `
         <div class="menu-icon" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M17 21v-2a4 4 0 0 1-2-2H5a4 4 0 0 0-4 4v2"></path>
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                 <circle cx="9" cy="7" r="4"></circle>
                 <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
                 <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
@@ -973,11 +923,19 @@ function showUserManagement() {
                     </svg>
                 </button>
             </div>
+            
             <div id="userListContainer" style="margin-bottom: 20px;">
-                <div style="text-align: center; padding: 40px; color: #64748b;">⏳ Memuat data user...</div>
+                <div style="text-align: center; padding: 40px; color: #64748b;">
+                    ⏳ Memuat data user...
+                </div>
             </div>
-            <button onclick="showAddUserForm()" style="width: 100%; padding: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer;">
-                + Tambah User Baru
+            
+            <button onclick="showAddUserForm()" style="width: 100%; padding: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Tambah User Baru
             </button>
         </div>
     `;
@@ -1000,12 +958,7 @@ async function loadUserList() {
     if (!container) return;
     
     try {
-        const callbackName = 'usersCallback_' + Date.now();
-        const result = await safeJSONP(
-            `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`,
-            callbackName,
-            10000
-        );
+        const result = await fetchUsersFromServer();
         
         if (result.success) {
             renderUserList(result.users);
@@ -1024,9 +977,46 @@ async function loadUserList() {
                 </div>
             `);
         } else {
-            container.innerHTML = `<div style="text-align: center; padding: 40px; color: #ef4444;">❌ Gagal memuat data user</div>`;
+            container.innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #ef4444;">
+                    ❌ Gagal memuat data user<br>
+                    <small style="color: #64748b;">${error.message}</small>
+                </div>
+            `;
         }
     }
+}
+
+function fetchUsersFromServer() {
+    return new Promise((resolve, reject) => {
+        if (!currentUser || !currentUser.username) {
+            reject(new Error('Tidak ada user yang login'));
+            return;
+        }
+        
+        const callbackName = 'usersCallback_' + Date.now();
+        const timeout = setTimeout(() => {
+            cleanupJSONP(callbackName);
+            reject(new Error('Timeout'));
+        }, 10000);
+        
+        window[callbackName] = (response) => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            resolve(response);
+        };
+        
+        const script = document.createElement('script');
+        script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
+        
+        script.onerror = () => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            reject(new Error('Network error'));
+        };
+        
+        document.body.appendChild(script);
+    });
 }
 
 function renderUserList(users) {
@@ -1036,7 +1026,12 @@ function renderUserList(users) {
     const validUsers = users.filter(user => user && user.username && typeof user.username === 'string');
     
     if (validUsers.length === 0) {
-        container.innerHTML = `<div style="text-align: center; padding: 40px; color: #ef4444;">❌ Tidak ada data user valid</div>`;
+        container.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #ef4444;">
+                ❌ Tidak ada data user valid<br>
+                <small style="color: #64748b;">Pastikan sheet USERS memiliki kolom yang benar</small>
+            </div>
+        `;
         return;
     }
     
@@ -1213,23 +1208,15 @@ async function handleAddUser(e) {
     }
     
     try {
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 'USER_MANAGEMENT',
-                action: 'add',
-                adminUser: currentUser.username,
-                adminPass: 'admin123',
-                userData: formData
-            })
-        });
+        const result = await addUserToServer(formData);
         
-        showCustomAlert('User berhasil ditambahkan!', 'success');
-        restoreUserManagement();
-        updateUserCache(formData.username, formData.password, formData);
-        
+        if (result.success) {
+            showCustomAlert('User berhasil ditambahkan!', 'success');
+            restoreUserManagement();
+            updateUserCache(formData.username, formData.password, formData);
+        } else {
+            showCustomAlert(result.error || 'Gagal menambahkan user', 'error');
+        }
     } catch (error) {
         updateUserCache(formData.username, formData.password, {
             ...formData,
@@ -1240,21 +1227,44 @@ async function handleAddUser(e) {
     }
 }
 
+function addUserToServer(userData) {
+    return new Promise((resolve, reject) => {
+        const payload = {
+            type: 'USER_MANAGEMENT',
+            action: 'add',
+            adminUser: currentUser.username,
+            adminPass: 'admin123',
+            userData: userData
+        };
+        
+        fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(() => resolve({ success: true }))
+        .catch(reject);
+    });
+}
+
 async function toggleUserStatus(username) {
     if (!confirm(`Yakin ingin mengubah status user @${username}?`)) return;
     
     try {
+        const payload = {
+            type: 'USER_MANAGEMENT',
+            action: 'toggle',
+            adminUser: currentUser.username,
+            adminPass: 'admin123',
+            targetUsername: username
+        };
+        
         await fetch(GAS_URL, {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 'USER_MANAGEMENT',
-                action: 'toggle',
-                adminUser: currentUser.username,
-                adminPass: 'admin123',
-                targetUsername: username
-            })
+            body: JSON.stringify(payload)
         });
         
         showCustomAlert('Status user diubah', 'success');
@@ -1280,17 +1290,19 @@ async function deleteUser(username) {
     }
     
     try {
+        const payload = {
+            type: 'USER_MANAGEMENT',
+            action: 'delete',
+            adminUser: currentUser.username,
+            adminPass: 'admin123',
+            targetUsername: username
+        };
+        
         await fetch(GAS_URL, {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 'USER_MANAGEMENT',
-                action: 'delete',
-                adminUser: currentUser.username,
-                adminPass: 'admin123',
-                targetUsername: username
-            })
+            body: JSON.stringify(payload)
         });
         
         showCustomAlert('User berhasil dihapus', 'success');
@@ -1306,36 +1318,124 @@ async function deleteUser(username) {
     }
 }
 
+// ============================================
+// 8. SYNC & OFFLINE SUPPORT
+// ============================================
+
+/**
+ * Sinkronisasi data users untuk mode offline
+ * Hanya dijalankan untuk admin saat login online berhasil
+ */
 async function syncUsersForOffline() {
+    // Validasi kondisi
     if (!navigator.onLine) {
-        console.log('[Sync] Skipped: Offline');
+        console.log('Sync skipped: Device is offline');
         return;
     }
     
-    if (!currentUser || currentUser.role !== 'admin') {
-        console.log('[Sync] Skipped: Not admin');
+    if (!currentUser) {
+        console.log('Sync skipped: No authenticated user');
         return;
     }
     
-    console.log('[Sync] Starting...');
+    if (currentUser.role !== 'admin') {
+        console.log('Sync skipped: User is not admin');
+        return;
+    }
+    
+    console.log('[SYNC] Starting offline users sync for admin...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 detik timeout
     
     try {
         const callbackName = 'syncUsersCallback_' + Date.now();
-        const url = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
         
-        const result = await safeJSONP(url, callbackName, 8000);
+        const result = await new Promise((resolve, reject) => {
+            // Cleanup function
+            const cleanup = () => {
+                clearTimeout(timeoutId);
+                if (window[callbackName]) delete window[callbackName];
+            };
+            
+            // Setup callback
+            window[callbackName] = (response) => {
+                cleanup();
+                if (response && response.success && Array.isArray(response.users)) {
+                    resolve(response);
+                } else {
+                    reject(new Error(response?.error || 'Invalid response format'));
+                }
+            };
+            
+            // Create script tag
+            const script = document.createElement('script');
+            script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
+            
+            script.onerror = () => {
+                cleanup();
+                reject(new Error('Failed to load script'));
+            };
+            
+            // Abort handling
+            controller.signal.addEventListener('abort', () => {
+                cleanup();
+                reject(new Error('Sync aborted'));
+            });
+            
+            document.body.appendChild(script);
+            
+            // Auto cleanup script DOM after load
+            script.onload = () => {
+                setTimeout(() => {
+                    if (script.parentNode) script.remove();
+                }, 2000);
+            };
+        });
         
-        if (result.success && Array.isArray(result.users)) {
+        // Update cache dengan data fresh dari server
+        if (result.users.length > 0) {
             updateUsersCache(result.users);
-            console.log(`[Sync] Success: ${result.users.length} users cached`);
+            console.log(`[SYNC] Success: ${result.users.length} users cached for offline mode`);
+            
+            // Optional: Silent notification (bisa diaktifkan jika perlu)
+            // showCustomAlert(`✓ ${result.users.length} users synced`, 'success');
+        } else {
+            console.log('[SYNC] No users returned from server');
         }
+        
     } catch (error) {
-        console.error('[Sync] Error:', error.message);
+        console.error('[SYNC] Failed:', error.message);
+        // Tidak perlu alert agar tidak ganggu UX, cache lama masih valid
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
+/**
+ * Helper untuk cleanup JSONP callback dan script tags
+ */
+function cleanupJSONP(callbackName) {
+    // Hapus global callback
+    if (window[callbackName]) {
+        try {
+            delete window[callbackName];
+        } catch (e) {
+            window[callbackName] = undefined;
+        }
+    }
+    
+    // Hapus script tag yang terkait (best effort)
+    const scripts = document.querySelectorAll('script');
+    scripts.forEach(script => {
+        if (script.src && script.src.includes('callback=' + callbackName)) {
+            if (script.parentNode) script.remove();
+        }
+    });
+}
+
 // ============================================
-// 8. CHANGE PASSWORD
+// 9. CHANGE PASSWORD FUNCTIONS
 // ============================================
 
 function showChangePasswordModal() {
@@ -1351,6 +1451,7 @@ function showChangePasswordModal() {
     
     if (usernameSpan) usernameSpan.textContent = currentUser.username;
     
+    // Admin tidak perlu old password
     if (currentUser.role === 'admin') {
         if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
         const oldPassInput = document.getElementById('cpOldPassword');
@@ -1410,6 +1511,7 @@ function hideCPError() {
     }
 }
 
+// Ganti fungsi handleChangePasswordSubmit dengan ini:
 async function handleChangePasswordSubmit(e) {
     e.preventDefault();
     hideCPError();
@@ -1423,6 +1525,7 @@ async function handleChangePasswordSubmit(e) {
     const newPassword = document.getElementById('cpNewPassword')?.value || '';
     const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
     
+    // Validasi input...
     if (newPassword.length < 4) {
         showCPError('Password baru minimal 4 karakter');
         return;
@@ -1440,15 +1543,17 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        const callbackName = 'cpCallback_' + Date.now();
-        const result = await safeJSONP(
-            `${GAS_URL}?action=changePassword&username=${encodeURIComponent(currentUser.username)}&oldPassword=${encodeURIComponent(currentUser.role === 'admin' ? '' : oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`,
-            callbackName,
-            10000
+        // Gunakan JSONP untuk bisa membaca response
+        const result = await changePasswordJSONP(
+            currentUser.username,
+            currentUser.role === 'admin' ? '' : oldPassword,
+            newPassword
         );
         
         if (result.success) {
+            // Update cache lokal
             updatePasswordInCache(currentUser.username, newPassword);
+            
             showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
             closeChangePasswordModal();
             
@@ -1470,8 +1575,36 @@ async function handleChangePasswordSubmit(e) {
     }
 }
 
+// Pastikan fungsi JSONP ini ada (sudah ada di kode Anda tapi perlu dipastikan):
+function changePasswordJSONP(username, oldPassword, newPassword) {
+    return new Promise((resolve, reject) => {
+        const callbackName = 'cpCallback_' + Date.now();
+        const timeout = setTimeout(() => {
+            cleanupJSONP(callbackName);
+            reject(new Error('Timeout'));
+        }, 10000);
+        
+        window[callbackName] = (response) => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            resolve(response);
+        };
+        
+        const script = document.createElement('script');
+        script.src = `${GAS_URL}?action=changePassword&username=${encodeURIComponent(username)}&oldPassword=${encodeURIComponent(oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`;
+        
+        script.onerror = () => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            reject(new Error('Network error'));
+        };
+        
+        document.body.appendChild(script);
+    });
+}
+
 // ============================================
-// 9. UPLOAD PROGRESS MANAGER
+// 10. UPLOAD PROGRESS MANAGER
 // ============================================
 
 function showUploadProgress(title = 'Mengupload Data...') {
@@ -1605,249 +1738,38 @@ function hideUploadProgress() {
 }
 
 function cancelUpload() {
-    console.log('[Upload] User cancelled');
     if (currentUploadController) {
         currentUploadController.abort();
-        currentUploadController = null;
     }
     hideUploadProgress();
     showCustomAlert('Upload dibatalkan', 'warning');
 }
 
 // ============================================
-// 10. LOGSHEET FUNCTIONS (TURBINE) - SERVER-SIDE UPLOAD
+// 11. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 
-function initParamCameraListener() {
-    const paramCamera = document.getElementById('paramCamera');
-    if (paramCamera) {
-        paramCamera.addEventListener('change', handleParamPhoto);
-    }
-}
-
-/**
- * Handle photo selection - NO CLIENT COMPRESSION
- * Kirim base64 asli ke server untuk diproses di GAS/Drive
- */
-async function handleParamPhoto(event) {
-    const file = event.target.files[0];
-    if (!file) {
-        proceedSaveAfterPhoto();
-        return;
-    }
-    
-    // Validasi tipe file
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validTypes.includes(file.type)) {
-        showCustomAlert('Format file tidak didukung. Gunakan JPG, PNG, atau WebP.', 'error');
-        event.target.value = '';
-        return;
-    }
-    
-    // Validasi ukuran (max 15MB untuk base64 aman di POST)
-    const maxSizeMB = 15;
-    if (file.size > maxSizeMB * 1024 * 1024) {
-        showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(file.size)}). Maksimal ${maxSizeMB}MB.`, 'error');
-        event.target.value = '';
-        return;
-    }
-    
-    showCustomAlert('📸 Membaca foto...', 'info');
-    isUploadingPhoto = true;
-    
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-        // Gunakan base64 asli tanpa kompresi canvas
-        const base64Photo = e.target.result;
-        const fullLabel = AREAS[activeArea][activeIdx];
-        
-        if (!currentInput[activeArea]) currentInput[activeArea] = {};
-        
-        // Simpan metadata foto dengan base64 asli
-        currentInput[activeArea][fullLabel + '_photoData'] = base64Photo;
-        currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
-        currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
-        currentInput[activeArea][fullLabel + '_photoUploaded'] = false;
-        currentInput[activeArea][fullLabel + '_photoUrl'] = null;
-        
-        // Jika online, langsung upload ke Drive (server akan handle kompresi jika perlu)
-        if (navigator.onLine) {
-            showCustomAlert('📤 Mengupload ke Google Drive...', 'info');
-            
-            try {
-                const driveUrl = await uploadPhotoToDriveRealtime(base64Photo, fullLabel, file.name);
-                
-                if (driveUrl) {
-                    currentInput[activeArea][fullLabel + '_photoUrl'] = driveUrl;
-                    currentInput[activeArea][fullLabel + '_photoUploaded'] = true;
-                    updatePhotoIndicator(true, 'linked');
-                    showCustomAlert('✓ Foto berhasil diupload ke Google Drive!', 'success');
-                } else {
-                    updatePhotoIndicator(true, 'pending');
-                    showCustomAlert('📸 Foto tersimpan. Akan diupload saat submit.', 'warning');
-                }
-            } catch (uploadError) {
-                console.error('[Upload Error]', uploadError);
-                updatePhotoIndicator(true, 'pending');
-                showCustomAlert('📸 Foto tersimpan lokal. Upload Drive saat submit.', 'warning');
-            }
-        } else {
-            // Mode offline
-            updatePhotoIndicator(true, 'offline');
-            showCustomAlert('📸 Foto tersimpan (offline). Upload saat online.', 'warning');
-        }
-        
-        // Simpan ke localStorage
-        localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-        
-        console.log(`[Photo] Original size: ${formatFileSize(file.size)}, Base64 length: ${base64Photo.length}`);
-        
-        setTimeout(() => {
-            proceedSaveAfterPhoto();
-            isUploadingPhoto = false;
-        }, 500);
-    };
-    
-    reader.onerror = function() {
-        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
-        isUploadingPhoto = false;
-    };
-    
-    reader.readAsDataURL(file);
-}
-
-/**
- * Upload foto ke Google Drive real-time dengan base64 asli
- * Server (GAS) akan menangani penyimpanan dan kompresi jika diperlukan
- */
-async function uploadPhotoToDriveRealtime(base64Data, paramName, originalFilename) {
-    return new Promise((resolve, reject) => {
-        const timestamp = new Date().getTime();
-        const dateStr = new Date().toISOString().split('T')[0];
-        const safeParamName = paramName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 30);
-        const filename = `LOG_${dateStr}_${safeParamName}_${timestamp}.jpg`;
-        
-        // Buat form data untuk POST dengan base64 asli
-        const formData = new FormData();
-        formData.append('action', 'uploadToDrive');
-        formData.append('filename', filename);
-        formData.append('data', base64Data); // Kirim base64 asli tanpa kompresi
-        formData.append('mimeType', 'image/jpeg');
-        formData.append('originalName', originalFilename || 'photo.jpg');
-        
-        // Gunakan fetch dengan timeout panjang karena file besar
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 detik timeout untuk file besar
-        
-        fetch(GAS_URL, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-        })
-        .then(response => response.json())
-        .then(data => {
-            clearTimeout(timeoutId);
-            if (data.success && data.url) {
-                resolve(data.url);
-            } else {
-                reject(new Error(data.error || 'Upload failed'));
-            }
-        })
-        .catch(error => {
-            clearTimeout(timeoutId);
-            console.error('[UploadPhoto] Error:', error);
-            // Jika error CORS atau network, resolve dengan null (akan dihandle saat submit)
-            if (error.name === 'TypeError' || error.name === 'AbortError') {
-                resolve(null);
-            } else {
-                reject(error);
-            }
-        });
-    });
-}
-
-function proceedSaveAfterPhoto() {
-    if (activeIdx < AREAS[activeArea].length - 1) {
-        activeIdx++;
-        showStep();
-        renderProgressDots();
-        updatePhotoIndicator(false);
-    } else {
-        showCustomAlert(`✓ Area ${activeArea} selesai diisi!`, 'success');
-        setTimeout(() => navigateTo('areaListScreen'), 1500);
-    }
-}
-
-/**
- * Update indicator foto dengan status yang berbeda
- */
-function updatePhotoIndicator(hasPhoto, status = null) {
-    const paramCard = document.querySelector('.param-card');
-    if (!paramCard) return;
-    
-    let indicator = paramCard.querySelector('.photo-indicator');
-    
-    if (hasPhoto) {
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.className = 'photo-indicator';
-            indicator.style.cssText = `
-                position: absolute;
-                top: 12px;
-                right: 12px;
-                padding: 4px 8px;
-                border-radius: 12px;
-                font-size: 0.75rem;
-                display: flex;
-                align-items: center;
-                gap: 4px;
-                z-index: 10;
-                font-weight: 600;
-            `;
-            paramCard.style.position = 'relative';
-            paramCard.appendChild(indicator);
-        }
-        
-        // Style berdasarkan status
-        if (status === 'linked') {
-            indicator.style.background = '#10b981'; // Hijau
-            indicator.style.color = 'white';
-            indicator.innerHTML = '☁️ Drive';
-        } else if (status === 'pending') {
-            indicator.style.background = '#f59e0b'; // Kuning
-            indicator.style.color = 'white';
-            indicator.innerHTML = '⏳ Pending';
-        } else if (status === 'offline') {
-            indicator.style.background = '#64748b'; // Abu
-            indicator.style.color = 'white';
-            indicator.innerHTML = '📱 Local';
-        } else {
-            indicator.style.background = '#3b82f6'; // Biru
-            indicator.style.color = 'white';
-            indicator.innerHTML = '📸 Ada';
-        }
-    } else if (indicator) {
-        indicator.remove();
-    }
-}
-
-async function fetchLastData() {
+function fetchLastData() {
     updateStatusIndicator(false);
+    const timeout = setTimeout(() => renderMenu(), 8000);
+    const callbackName = 'jsonp_' + Date.now();
     
-    try {
-        const callbackName = 'jsonp_' + Date.now();
-        const result = await Promise.race([
-            safeJSONP(`${GAS_URL}?callback=${callbackName}`, callbackName, 8000),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
-        ]);
-        
-        lastData = result;
+    window[callbackName] = (data) => {
+        clearTimeout(timeout);
+        lastData = data;
         updateStatusIndicator(true);
+        cleanupJSONP(callbackName);
         renderMenu();
-    } catch (error) {
-        console.warn('Fetch last data failed:', error);
+    };
+    
+    const script = document.createElement('script');
+    script.src = `${GAS_URL}?callback=${callbackName}`;
+    script.onerror = () => {
+        clearTimeout(timeout);
+        cleanupJSONP(callbackName);
         renderMenu();
-    }
+    };
+    document.body.appendChild(script);
 }
 
 function updateStatusIndicator(isOnline) {
@@ -1864,7 +1786,7 @@ function renderMenu() {
     
     Object.entries(AREAS).forEach(([areaName, params]) => {
         const areaData = currentInput[areaName] || {};
-        const filled = Object.keys(areaData).filter(k => !k.endsWith('_photoData') && !k.endsWith('_photoTime') && !k.endsWith('_photoOperator') && !k.endsWith('_photoUploaded') && !k.endsWith('_photoUrl')).length;
+        const filled = Object.keys(areaData).length;
         const total = params.length;
         const percent = Math.round((filled / total) * 100);
         const isCompleted = filled === total && total > 0;
@@ -1874,9 +1796,6 @@ function renderMenu() {
             const firstLine = val.split('\n')[0];
             return ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         });
-        
-        // Cek apakah ada foto yang sudah diupload ke Drive
-        const hasDrivePhotos = Object.keys(areaData).some(k => k.endsWith('_photoUrl') && areaData[k]);
         
         if (isCompleted) completedAreas++;
         
@@ -1898,7 +1817,6 @@ function renderMenu() {
                     <div class="area-name">${areaName}</div>
                     <div class="area-meta ${hasAbnormal ? 'warning' : ''}">
                         ${hasAbnormal ? '⚠️ Ada parameter bermasalah • ' : ''}${filled} dari ${total} parameter
-                        ${hasDrivePhotos ? ' • ☁️ Drive' : ''}
                     </div>
                 </div>
                 <div class="area-status">
@@ -1922,7 +1840,7 @@ function updateOverallProgress() {
     const totalAreas = Object.keys(AREAS).length;
     let completedAreas = 0;
     Object.entries(AREAS).forEach(([areaName, params]) => {
-        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).filter(k => !k.includes('_photo')).length : 0;
+        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
         if (filled === params.length && filled > 0) completedAreas++;
     });
     updateOverallProgressUI(completedAreas, totalAreas);
@@ -1967,42 +1885,12 @@ function renderProgressDots() {
         const hasIssue = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         const isActive = i === activeIdx;
         
-        // Cek status foto
-        const hasPhotoData = currentInput[activeArea]?.[fullLabel + '_photoData'] ? true : false;
-        const photoUrl = currentInput[activeArea]?.[fullLabel + '_photoUrl'];
-        const isUploaded = currentInput[activeArea]?.[fullLabel + '_photoUploaded'];
-        
         let className = '';
-        let icon = '';
+        if (isActive) className = 'active';
+        else if (hasIssue) className = 'has-issue';
+        else if (isFilled) className = 'filled';
         
-        if (isActive) {
-            className = 'active';
-        } else if (hasIssue) {
-            className = 'has-issue';
-            icon = '⚠️';
-        } else if (isFilled) {
-            className = 'filled';
-        }
-        
-        if (hasPhotoData) {
-            className += ' has-photo';
-            if (isUploaded && photoUrl) {
-                icon = '☁️'; // Sudah di Drive
-            } else {
-                icon = '📸'; // Local only
-            }
-        }
-        
-        let title = '';
-        if (hasIssue) title = firstLine;
-        if (hasPhotoData) {
-            title = title ? title + ' + ' : '';
-            title += isUploaded ? 'Foto di Google Drive' : 'Foto tersimpan lokal';
-        }
-        
-        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${title}" style="position: relative;">
-            ${icon ? `<span style="position: absolute; top: -8px; right: -4px; font-size: 10px;">${icon}</span>` : ''}
-        </div>`;
+        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${hasIssue ? firstLine : ''}"></div>`;
     }
     container.innerHTML = html;
 }
@@ -2121,17 +2009,6 @@ function showStep() {
             unitDisplay.style.display = 'flex';
         }
         if (mainInputWrapper) mainInputWrapper.classList.remove('has-select');
-    }
-    
-    // Update photo indicator berdasarkan status yang tersimpan
-    const photoData = currentInput[activeArea]?.[fullLabel + '_photoData'];
-    const photoUrl = currentInput[activeArea]?.[fullLabel + '_photoUrl'];
-    const isUploaded = currentInput[activeArea]?.[fullLabel + '_photoUploaded'];
-    
-    if (photoData) {
-        updatePhotoIndicator(true, isUploaded && photoUrl ? 'linked' : 'pending');
-    } else {
-        updatePhotoIndicator(false);
     }
     
     loadAbnormalStatus(fullLabel);
@@ -2311,22 +2188,12 @@ function saveCurrentStep() {
 function saveStep() {
     saveCurrentStep();
     
-    const fullLabel = AREAS[activeArea][activeIdx];
-    const existingPhoto = currentInput[activeArea] && currentInput[activeArea][fullLabel + '_photoData'];
-    
-    if (existingPhoto) {
-        proceedSaveAfterPhoto();
+    if (activeIdx < AREAS[activeArea].length - 1) {
+        activeIdx++;
+        showStep();
     } else {
-        if (confirm('📸 Ambil foto lokasi sebagai bukti pengisian?\n\nFoto akan diupload ke Google Drive.')) {
-            const paramCamera = document.getElementById('paramCamera');
-            if (paramCamera) {
-                paramCamera.click();
-            } else {
-                proceedSaveAfterPhoto();
-            }
-        } else {
-            proceedSaveAfterPhoto();
-        }
+        showCustomAlert(`Area ${activeArea} selesai diisi!`, 'success');
+        setTimeout(() => navigateTo('areaListScreen'), 1500);
     }
 }
 
@@ -2341,181 +2208,61 @@ function goBack() {
     }
 }
 
-/**
- * Kirim data logsheet ke Google Sheets dengan foto asli (base64)
- * Server akan handle upload ke Drive
- */
 async function sendToSheet() {
     if (!requireAuth()) return;
     
-    // Cek apakah ada foto yang belum diupload ke Drive
-    const pendingPhotos = [];
+    const progress = showUploadProgress('Mengirim Logsheet...');
+    currentUploadController = new AbortController();
+    
+    let allParameters = {};
     Object.entries(currentInput).forEach(([areaName, params]) => {
-        Object.keys(params).forEach(key => {
-            if (key.endsWith('_photoData') && !params[key.replace('_photoData', '_photoUploaded')]) {
-                pendingPhotos.push({
-                    area: areaName,
-                    param: key.replace('_photoData', ''),
-                    data: params[key],
-                    filename: `LOG_${new Date().toISOString().split('T')[0]}_${key.replace('_photoData', '').replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.jpg`
-                });
-            }
+        Object.entries(params).forEach(([paramName, value]) => {
+            allParameters[paramName] = value;
         });
     });
     
-    const progress = showUploadProgress('Mengirim Logsheet & Upload Foto...');
-    currentUploadController = new AbortController();
+    const finalData = {
+        type: 'LOGSHEET',
+        Operator: currentUser ? currentUser.name : 'Unknown',
+        OperatorId: currentUser ? currentUser.id : 'Unknown',
+        ...allParameters
+    };
     
-    const autoAbortTimeout = setTimeout(() => {
-        if (currentUploadController) {
-            currentUploadController.abort();
-        }
-    }, 300000); // 5 menit timeout untuk upload banyak foto besar
+    console.log('Sending Logsheet Data:', finalData);
     
     try {
-        // Jika ada foto pending dan online, upload dulu ke Drive
-        if (pendingPhotos.length > 0 && navigator.onLine) {
-            progress.updateText(`Mengupload ${pendingPhotos.length} foto ke Drive...`);
-            
-            // Upload semua foto pending secara sequential untuk menghindari timeout
-            for (const photo of pendingPhotos) {
-                try {
-                    const result = await uploadSinglePhotoToDrive(photo.data, photo.filename);
-                    if (result && result.url) {
-                        // Update currentInput dengan URL
-                        currentInput[photo.area][photo.param + '_photoUrl'] = result.url;
-                        currentInput[photo.area][photo.param + '_photoUploaded'] = true;
-                    }
-                } catch (e) {
-                    console.error('Failed upload:', photo.param, e);
-                }
-            }
-            
-            // Simpan perubahan (URL foto) ke localStorage
-            localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-        }
-        
-        // Siapkan data untuk dikirim ke Sheet
-        let allParameters = {};
-        let photoCount = 0;
-        let driveLinks = [];
-        
-        Object.entries(currentInput).forEach(([areaName, params]) => {
-            Object.entries(params).forEach(([paramName, value]) => {
-                // Hanya kirim nilai parameter (bukan metadata foto)
-                if (!paramName.endsWith('_photoData') && !paramName.endsWith('_photoTime') && 
-                    !paramName.endsWith('_photoOperator') && !paramName.endsWith('_photoUploaded')) {
-                    
-                    // Jika ini adalah URL foto, masukkan ke driveLinks
-                    if (paramName.endsWith('_photoUrl') && value) {
-                        driveLinks.push({
-                            parameter: paramName.replace('_photoUrl', ''),
-                            url: value
-                        });
-                        photoCount++;
-                    } else {
-                        // Parameter normal
-                        allParameters[paramName] = value;
-                    }
-                }
-            });
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(finalData),
+            signal: currentUploadController.signal
         });
         
-        // Tambahkan metadata logsheet
-        const finalData = {
-            type: 'LOGSHEET_WITH_DRIVE_PHOTOS',
-            Operator: currentUser ? currentUser.name : 'Unknown',
-            OperatorId: currentUser ? currentUser.id : 'Unknown',
-            PhotoCount: photoCount,
-            DriveLinks: driveLinks,
-            Timestamp: new Date().toISOString(),
-            ...allParameters
-        };
-        
-        progress.updateText('Menyimpan data ke Spreadsheet...');
-        
-        await Promise.race([
-            fetch(GAS_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(finalData),
-                signal: currentUploadController.signal
-            }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Upload timeout')), 120000))
-        ]);
-        
-        clearTimeout(autoAbortTimeout);
         progress.complete();
+        showCustomAlert('✓ Data berhasil dikirim ke sistem!', 'success');
         
-        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto di Google Drive)`, 'success');
-        
-        // Cleanup
         currentInput = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
         
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
-        clearTimeout(autoAbortTimeout);
-        console.error('[SendToSheet] Error:', error);
+        console.error('Error sending data:', error);
         progress.error();
         
-        // Simpan ke offline queue
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
-        offlineData.push({
-            ...finalData,
-            pendingUpload: true,
-            savedAt: new Date().toISOString()
-        });
+        offlineData.push(finalData);
         localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengirim. Data & foto disimpan lokal untuk upload ulang.', 'error');
+            showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
         }, 500);
-    } finally {
-        currentUploadController = null;
     }
 }
 
-/**
- * Upload single photo ke Google Drive dengan base64 asli
- */
-async function uploadSinglePhotoToDrive(base64Data, filename) {
-    return new Promise((resolve, reject) => {
-        const formData = new FormData();
-        formData.append('action', 'uploadToDrive');
-        formData.append('filename', filename);
-        formData.append('data', base64Data); // Base64 asli tanpa kompresi client
-        formData.append('mimeType', 'image/jpeg');
-        formData.append('folderName', 'Turbine_Logsheets_' + new Date().toISOString().split('T')[0]);
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 menit timeout untuk file besar
-        
-        fetch(GAS_URL, {
-            method: 'POST',
-            body: formData,
-            signal: controller.signal
-        })
-        .then(response => response.json())
-        .then(data => {
-            clearTimeout(timeoutId);
-            if (data.success && data.url) {
-                resolve({ url: data.url, id: data.fileId });
-            } else {
-                reject(new Error(data.error || 'Upload failed'));
-            }
-        })
-        .catch(error => {
-            clearTimeout(timeoutId);
-            reject(error);
-        });
-    });
-}
-
 // ============================================
-// 11. TPM FUNCTIONS (ALSO UPDATED FOR RAW UPLOAD)
+// 12. TPM FUNCTIONS
 // ============================================
 
 function updateTPMUserInfo() {
@@ -2575,12 +2322,12 @@ function resetTPMStatusButtons() {
     });
 }
 
-async function handleTPMPhoto(event) {
+function handleTPMPhoto(event) {
     const file = event.target.files[0];
     if (!file) return;
     
-    if (file.size > 15 * 1024 * 1024) {
-        showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(file.size)}). Maksimal 15MB.`, 'error');
+    if (file.size > 5 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
         event.target.value = '';
         return;
     }
@@ -2592,26 +2339,16 @@ async function handleTPMPhoto(event) {
     }
     
     const reader = new FileReader();
-    reader.onload = async function(e) {
-        try {
-            showCustomAlert('📸 Foto dibaca...', 'info');
-            
-            // Gunakan base64 asli tanpa kompresi
-            currentTPMPhoto = e.target.result;
-            const preview = document.getElementById('tpmPhotoPreview');
-            const photoSection = document.getElementById('tpmPhotoSection');
-            
-            if (preview) {
-                preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
-            }
-            if (photoSection) photoSection.classList.add('has-photo');
-            
-            showCustomAlert(`📸 Foto berhasil dibaca! (${formatFileSize(file.size)})`, 'success');
-            
-        } catch (error) {
-            console.error('TPM Photo error:', error);
-            showCustomAlert('Gagal membaca foto TPM.', 'error');
+    reader.onload = function(e) {
+        currentTPMPhoto = e.target.result;
+        const preview = document.getElementById('tpmPhotoPreview');
+        const photoSection = document.getElementById('tpmPhotoSection');
+        
+        if (preview) {
+            preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
         }
+        if (photoSection) photoSection.classList.add('has-photo');
+        showCustomAlert('Foto berhasil diambil!', 'success');
     };
     reader.readAsDataURL(file);
 }
@@ -2660,12 +2397,11 @@ async function submitTPMData() {
         return;
     }
     
-    const progress = showUploadProgress('Mengupload TPM...');
-    currentUploadController = new AbortController();
+    const progress = showUploadProgress('Mengupload TPM & Foto...');
+    progress.updateText('Mengompresi foto...');
     
-    const autoAbort = setTimeout(() => {
-        currentUploadController?.abort();
-    }, 120000); // 2 menit untuk file besar
+    await new Promise(resolve => setTimeout(resolve, 800));
+    progress.updateText('Mengirim data...');
     
     const tpmData = {
         type: 'TPM',
@@ -2673,53 +2409,46 @@ async function submitTPMData() {
         status: currentTPMStatus,
         action: action,
         notes: notes,
-        photo: currentTPMPhoto, // Base64 asli
+        photo: currentTPMPhoto,
         user: currentUser ? currentUser.name : 'Unknown',
         timestamp: new Date().toISOString()
     };
     
     try {
-        await Promise.race([
-            fetch(GAS_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(tpmData),
-                signal: currentUploadController.signal
-            }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('TPM Upload timeout')), 120000))
-        ]);
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(tpmData)
+        });
         
-        clearTimeout(autoAbort);
         progress.complete();
         
         let tpmHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_HISTORY) || '[]');
         tpmHistory.push({...tpmData, photo: '[UPLOADED]'});
         localStorage.setItem(DRAFT_KEYS.TPM_HISTORY, JSON.stringify(tpmHistory));
         
-        showCustomAlert(`✓ Data TPM berhasil disimpan!`, 'success');
+        showCustomAlert(`✓ Data TPM ${activeTPMArea} berhasil disimpan!`, 'success');
         currentTPMPhoto = null;
         currentTPMStatus = '';
         
         setTimeout(() => navigateTo('tpmScreen'), 1500);
         
     } catch (error) {
-        clearTimeout(autoAbort);
-        console.error('[TPM] Error:', error);
         progress.error();
         
         let offlineTPM = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_OFFLINE) || '[]');
         offlineTPM.push(tpmData);
         localStorage.setItem(DRAFT_KEYS.TPM_OFFLINE, JSON.stringify(offlineTPM));
         
-        showCustomAlert('Gagal upload. Data disimpan lokal.', 'error');
-    } finally {
-        currentUploadController = null;
+        setTimeout(() => {
+            showCustomAlert('Gagal mengupload. Data disimpan lokal.', 'error');
+        }, 500);
     }
 }
 
 // ============================================
-// 12. BALANCING FUNCTIONS (NO CHANGES NEEDED)
+// 13. BALANCING FUNCTIONS
 // ============================================
 
 function initBalancingScreen() {
@@ -2912,10 +2641,14 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
         
         if (fromSpreadsheet && navigator.onLine) {
             try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                
                 const response = await fetch(`${GAS_URL}?action=getLastBalancing&t=${Date.now()}`, {
-                    signal: AbortSignal.timeout(10000)
+                    signal: controller.signal
                 });
                 
+                clearTimeout(timeoutId);
                 const result = await response.json();
                 
                 if (result.success && result.data) {
@@ -2940,6 +2673,7 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
             return;
         }
         
+        // Mapping field dari server ke form
         const fieldMapping = {
             'loadMW': lastData['Load_MW'],
             'eksporMW': lastData['Ekspor_Impor_MW'],
@@ -3281,10 +3015,6 @@ async function submitBalancingData() {
     const progress = showUploadProgress('Mengirim Data Balancing...');
     currentUploadController = new AbortController();
     
-    const autoAbort = setTimeout(() => {
-        currentUploadController?.abort();
-    }, 30000);
-    
     const eksporValue = getEksporImporValue();
     const lpBalance = calculateLPBalance();
     
@@ -3348,19 +3078,20 @@ async function submitBalancingData() {
     };
     
     try {
-        await Promise.race([
-            fetch(GAS_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(balancingData),
-                signal: currentUploadController.signal
-            }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Balancing timeout')), 30000))
-        ]);
+        progress.updateText('Menghitung ulang balance...');
+        await new Promise(resolve => setTimeout(resolve, 500));
         
-        clearTimeout(autoAbort);
+        progress.updateText('Mengirim ke server...');
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(balancingData),
+            signal: currentUploadController.signal
+        });
+        
         progress.complete();
+        showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
         
         let balancingHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING_HISTORY) || '[]');
         balancingHistory.push({
@@ -3368,8 +3099,6 @@ async function submitBalancingData() {
             submittedAt: new Date().toISOString()
         });
         localStorage.setItem(DRAFT_KEYS.BALANCING_HISTORY, JSON.stringify(balancingHistory));
-        
-        showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
         
         setTimeout(() => {
             const waMessage = encodeURIComponent(formatWhatsAppMessage(balancingData));
@@ -3379,7 +3108,6 @@ async function submitBalancingData() {
         }, 1000);
         
     } catch (error) {
-        clearTimeout(autoAbort);
         console.error('Balancing Error:', error);
         progress.error();
         
@@ -3390,8 +3118,6 @@ async function submitBalancingData() {
         setTimeout(() => {
             showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
         }, 500);
-    } finally {
-        currentUploadController = null;
     }
 }
 
@@ -3404,26 +3130,30 @@ function toggleSS2000Detail() {
 }
 
 // ============================================
-// 13. CT LOGSHEET FUNCTIONS (NO CHANGES NEEDED)
+// 14. CT LOGSHEET FUNCTIONS
 // ============================================
 
-async function fetchLastDataCT() {
+function fetchLastDataCT() {
     updateStatusIndicator(false);
+    const timeout = setTimeout(() => renderCTMenu(), 8000);
+    const callbackName = 'jsonp_ct_' + Date.now();
     
-    try {
-        const callbackName = 'jsonp_ct_' + Date.now();
-        const result = await Promise.race([
-            safeJSONP(`${GAS_URL}?action=getLastCT&callback=${callbackName}`, callbackName, 8000),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
-        ]);
-        
-        lastDataCT = result || {};
+    window[callbackName] = (data) => {
+        clearTimeout(timeout);
+        lastDataCT = data;
         updateStatusIndicator(true);
+        cleanupJSONP(callbackName);
         renderCTMenu();
-    } catch (error) {
-        console.warn('Fetch CT last data failed:', error);
+    };
+    
+    const script = document.createElement('script');
+    script.src = `${GAS_URL}?action=getLastCT&callback=${callbackName}`;
+    script.onerror = () => {
+        clearTimeout(timeout);
+        cleanupJSONP(callbackName);
         renderCTMenu();
-    }
+    };
+    document.body.appendChild(script);
 }
 
 function renderCTMenu() {
@@ -3914,10 +3644,6 @@ async function sendCTToSheet() {
     const progress = showUploadProgress('Mengirim Logsheet CT...');
     currentUploadController = new AbortController();
     
-    const autoAbort = setTimeout(() => {
-        currentUploadController?.abort();
-    }, 25000);
-    
     let allParameters = {};
     Object.entries(currentInputCT).forEach(([areaName, params]) => {
         Object.entries(params).forEach(([paramName, value]) => {
@@ -3932,23 +3658,18 @@ async function sendCTToSheet() {
         ...allParameters
     };
     
-    console.log('Sending CT Logsheet Data...');
+    console.log('Sending CT Logsheet Data:', finalData);
     
     try {
-        await Promise.race([
-            fetch(GAS_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(finalData),
-                signal: currentUploadController.signal
-            }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('CT Upload timeout')), 25000))
-        ]);
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(finalData),
+            signal: currentUploadController.signal
+        });
         
-        clearTimeout(autoAbort);
         progress.complete();
-        
         showCustomAlert('✓ Data CT berhasil dikirim ke sistem!', 'success');
         
         currentInputCT = {};
@@ -3957,7 +3678,6 @@ async function sendCTToSheet() {
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
-        clearTimeout(autoAbort);
         console.error('Error sending CT data:', error);
         progress.error();
         
@@ -3968,13 +3688,11 @@ async function sendCTToSheet() {
         setTimeout(() => {
             showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
         }, 500);
-    } finally {
-        currentUploadController = null;
     }
 }
 
 // ============================================
-// 14. UI & EVENT LISTENERS
+// 15. UI & EVENT LISTENERS
 // ============================================
 
 function setupLoginListeners() {
@@ -4025,7 +3743,7 @@ function loadUserStats() {
     let completedAreas = 0;
     
     Object.entries(AREAS).forEach(([areaName, params]) => {
-        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).filter(k => !k.includes('_photo')).length : 0;
+        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
         if (filled === params.length && filled > 0) completedAreas++;
     });
     
@@ -4043,7 +3761,7 @@ function loadUserStats() {
 }
 
 // ============================================
-// 15. PWA INSTALL HANDLER
+// 16. PWA INSTALL HANDLER
 // ============================================
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -4188,11 +3906,8 @@ function showToast(msg, type) {
 }
 
 // ============================================
-// 16. KEYBOARD SHORTCUTS & EMERGENCY RESET
+// 17. KEYBOARD SHORTCUTS
 // ============================================
-
-let escPressCount = 0;
-let escResetTimer = null;
 
 document.addEventListener('keydown', (e) => {
     const paramScreen = document.getElementById('paramScreen');
@@ -4215,27 +3930,10 @@ document.addEventListener('keydown', (e) => {
             goBackCT();
         }
     }
-    
-    // Emergency reset dengan triple-tap ESC
-    if (e.key === 'Escape') {
-        escPressCount++;
-        
-        if (escPressCount === 1) {
-            escResetTimer = setTimeout(() => {
-                escPressCount = 0;
-            }, 2000);
-        }
-        
-        if (escPressCount >= 3) {
-            clearTimeout(escResetTimer);
-            escPressCount = 0;
-            emergencyResetUpload();
-        }
-    }
 });
 
 // ============================================
-// 17. DOM READY INITIALIZATION
+// 18. DOM READY INITIALIZATION
 // ============================================
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -4247,7 +3945,6 @@ window.addEventListener('DOMContentLoaded', () => {
     initAuth();
     setupLoginListeners();
     setupTPMListeners();
-    initParamCameraListener();
     
     simulateLoading();
     
