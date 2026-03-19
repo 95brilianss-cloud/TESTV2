@@ -1,9 +1,9 @@
 // ============================================
-// TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.5.5 (Fixed Sync & Compression)
+// TURBINE LOGSHEET PRO - VERSION 1.6.0
+// Feature: Google Drive Photo Upload for Logsheet
 // ============================================
 
-const APP_VERSION = '1.5.7';
+const APP_VERSION = '1.6.0';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -30,7 +30,8 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
+// GAS URL - PASTIKAN SUDAH UPDATE SCRIPT UNTUK HANDLE UPLOAD DRIVE
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxsbKon3vlsHlaFOb4NR_li801XtGSMMzamGZnVokF6FxvJULlDLkbvspRmPa_9yw2i/exec";
 
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
@@ -259,6 +260,7 @@ let deferredPrompt = null;
 let installBannerShown = false;
 let pendingSaveAction = null;
 let currentParamPhoto = null;
+let isUploadingPhoto = false; // Flag untuk mencegah double upload
 
 let lastDataCT = {};
 let currentInputCT = {};
@@ -311,14 +313,13 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================
-// 5. UTILITY FUNCTIONS & COMPRESSION (FIXED)
+// 5. UTILITY FUNCTIONS & COMPRESSION
 // ============================================
 
 async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSizeMB = 2.5) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         
-        // Timeout safety
         const timeout = setTimeout(() => {
             reject(new Error('Timeout loading image'));
         }, 10000);
@@ -327,7 +328,6 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
             clearTimeout(timeout);
             
             try {
-                // Validasi dimensi
                 if (img.width === 0 || img.height === 0) {
                     reject(new Error('Invalid image dimensions'));
                     return;
@@ -337,7 +337,6 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
                 let width = img.width;
                 let height = img.height;
                 
-                // Resize jika terlalu besar
                 if (width > maxWidth) {
                     height = Math.round(height * (maxWidth / width));
                     width = maxWidth;
@@ -352,12 +351,10 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
                     return;
                 }
                 
-                // Background putih untuk transparansi
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, width, height);
                 ctx.drawImage(img, 0, 0, width, height);
                 
-                // Kompresi dengan iterasi
                 let currentQuality = quality;
                 let compressed = canvas.toDataURL('image/jpeg', currentQuality);
                 const maxBytes = maxSizeMB * 1024 * 1024;
@@ -464,6 +461,7 @@ function emergencyResetUpload() {
         uploadProgressInterval = null;
     }
     currentUploadController = null;
+    isUploadingPhoto = false;
     hideUploadProgress();
     showCustomAlert('Sinkronisasi dihentikan. Silakan coba lagi.', 'warning');
 }
@@ -1689,13 +1687,62 @@ function cancelUpload() {
 }
 
 // ============================================
-// 10. LOGSHEET FUNCTIONS (TURBINE) - FIXED
+// 10. LOGSHEET FUNCTIONS (TURBINE) - WITH GDRIVE UPLOAD
 // ============================================
 
 function initParamCameraListener() {
     const paramCamera = document.getElementById('paramCamera');
     if (paramCamera) {
         paramCamera.addEventListener('change', handleParamPhoto);
+    }
+}
+
+/**
+ * Upload photo ke Google Drive via GAS
+ * @param {string} base64Data - Base64 image data
+ * @param {string} paramName - Nama parameter untuk nama file
+ * @returns {Promise<string>} - Google Drive URL
+ */
+async function uploadPhotoToDrive(base64Data, paramName) {
+    // Generate nama file unik
+    const timestamp = new Date().getTime();
+    const dateStr = new Date().toISOString().split('T')[0];
+    const safeParamName = paramName.replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `LOG_${dateStr}_${safeParamName}_${timestamp}.jpg`;
+    
+    const uploadData = {
+        action: 'uploadPhoto',
+        filename: filename,
+        mimeType: 'image/jpeg',
+        data: base64Data,
+        folderName: 'Turbine_Logsheets', // Folder di Google Drive
+        operator: currentUser ? currentUser.name : 'Unknown',
+        timestamp: new Date().toISOString()
+    };
+    
+    try {
+        // Coba pakai JSONP untuk dapat response (jika GAS support)
+        const callbackName = 'uploadCallback_' + timestamp;
+        const url = `${GAS_URL}?callback=${callbackName}`;
+        
+        // Karena base64 besar, kita pakai POST fetch tapi dengan mode cors (harus setup GAS)
+        // Atau sebagai fallback, kirim via POST no-cors dan polling (tapi ini tidak dapat response)
+        
+        // Solusi: Kirim ke GAS, GAS akan simpan dan return URL via JSONP jika bisa
+        // Tapi untuk base64 besar, JSONP tidak cocok karena URL length limit
+        
+        // Alternatif: Simpan dulu ke localStorage, nanti saat submit logsheet baru upload semua foto
+        // dan dapat URL dari response submit
+        
+        // Untuk saat ini, kita return null untuk menandakan "pending upload saat submit"
+        // Karena keterbatasan CORS dan size limit JSONP
+        
+        console.log('[Photo Upload] Photo queued for upload with submit:', filename);
+        return null; // Indicate that photo will be uploaded with logsheet submit
+        
+    } catch (error) {
+        console.error('[Photo Upload] Error:', error);
+        return null;
     }
 }
 
@@ -1722,13 +1769,16 @@ async function handleParamPhoto(event) {
         return;
     }
     
+    // Show loading indicator
+    showCustomAlert('📸 Mengkompresi & menyiapkan foto...', 'info');
+    isUploadingPhoto = true;
+    
     const reader = new FileReader();
     reader.onload = async function(e) {
         const base64Photo = e.target.result;
         
         try {
-            showCustomAlert('📸 Mengkompresi foto...', 'info');
-            
+            // Kompresi foto
             const compressedPhoto = await compressImage(base64Photo, 1280, 0.8, 2.5);
             const compressedSize = getBase64Size(compressedPhoto);
             
@@ -1736,32 +1786,119 @@ async function handleParamPhoto(event) {
             
             if (!currentInput[activeArea]) currentInput[activeArea] = {};
             
-            currentInput[activeArea][fullLabel + '_photo'] = compressedPhoto;
+            // Simpan metadata foto
+            currentInput[activeArea][fullLabel + '_photoData'] = compressedPhoto; // Simpan base64 untuk upload nanti
             currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
             currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
+            currentInput[activeArea][fullLabel + '_photoUploaded'] = false; // Flag status upload
+            currentInput[activeArea][fullLabel + '_photoUrl'] = null; // Akan diisi setelah upload ke Drive
+            
+            // Jika online, coba upload langsung ke Drive
+            if (navigator.onLine) {
+                showCustomAlert('📤 Mengupload ke Google Drive...', 'info');
+                
+                try {
+                    // Upload ke Drive dan dapatkan URL
+                    const driveUrl = await uploadPhotoToDriveRealtime(compressedPhoto, fullLabel);
+                    
+                    if (driveUrl) {
+                        // Jika berhasil dapat URL
+                        currentInput[activeArea][fullLabel + '_photoUrl'] = driveUrl;
+                        currentInput[activeArea][fullLabel + '_photoUploaded'] = true;
+                        // Hapus base64 untuk hemat storage (opsional, tapi base64 tetap diperlukan untuk fallback)
+                        // delete currentInput[activeArea][fullLabel + '_photoData']; // Jangan hapus dulu, jaga2 koneksi putus
+                        
+                        updatePhotoIndicator(true, 'linked'); // Indicator foto sudah di Drive
+                        showCustomAlert('✓ Foto berhasil diupload ke Google Drive!', 'success');
+                    } else {
+                        // Jika tidak dapat URL (mode no-cors), tandai sebagai pending
+                        updatePhotoIndicator(true, 'pending');
+                        showCustomAlert('📸 Foto tersimpan. Akan diupload saat submit.', 'success');
+                    }
+                } catch (uploadError) {
+                    console.error('[Upload Error]', uploadError);
+                    updatePhotoIndicator(true, 'pending');
+                    showCustomAlert('📸 Foto tersimpan lokal. Upload Drive saat submit.', 'warning');
+                }
+            } else {
+                // Mode offline
+                updatePhotoIndicator(true, 'offline');
+                showCustomAlert('📸 Foto tersimpan (offline). Upload saat online.', 'warning');
+            }
             
             localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-            updatePhotoIndicator(true);
             
             const compressRatio = ((1 - (compressedSize / originalSize)) * 100).toFixed(0);
-            showCustomAlert(`📸 Foto berhasil disimpan! (Dikurangi ${compressRatio}%)`, 'success');
+            console.log(`[Photo] Compressed ${compressRatio}%, size: ${formatFileSize(compressedSize)}`);
             
             setTimeout(() => {
                 proceedSaveAfterPhoto();
+                isUploadingPhoto = false;
             }, 500);
             
         } catch (error) {
             console.error('Compression error:', error);
             showCustomAlert('Gagal mengkompresi foto. Coba foto lain atau gunakan resolusi lebih rendah.', 'error');
+            isUploadingPhoto = false;
             event.target.value = '';
         }
     };
     
     reader.onerror = function() {
         showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
+        isUploadingPhoto = false;
     };
     
     reader.readAsDataURL(file);
+}
+
+/**
+ * Upload foto ke Google Drive real-time (saat foto diambil)
+ * Perlu endpoint GAS yang mendukung CORS atau menggunakan teknik khusus
+ */
+async function uploadPhotoToDriveRealtime(base64Data, paramName) {
+    return new Promise((resolve, reject) => {
+        const timestamp = new Date().getTime();
+        const dateStr = new Date().toISOString().split('T')[0];
+        const safeParamName = paramName.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 30);
+        const filename = `LOG_${dateStr}_${safeParamName}_${timestamp}.jpg`;
+        
+        // Buat form data untuk POST
+        const formData = new FormData();
+        formData.append('action', 'uploadPhotoDrive');
+        formData.append('filename', filename);
+        formData.append('data', base64Data);
+        formData.append('mimeType', 'image/jpeg');
+        formData.append('folderId', 'YOUR_FOLDER_ID'); // Ganti dengan ID folder Google Drive
+        
+        // Gunakan fetch dengan timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 detik timeout
+        
+        fetch(GAS_URL, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal
+        })
+        .then(response => response.json())
+        .then(data => {
+            clearTimeout(timeoutId);
+            if (data.success && data.url) {
+                resolve(data.url);
+            } else {
+                reject(new Error(data.error || 'Upload failed'));
+            }
+        })
+        .catch(error => {
+            clearTimeout(timeoutId);
+            // Jika error CORS atau network, resolve dengan null (akan dihandle saat submit)
+            if (error.name === 'TypeError' || error.name === 'AbortError') {
+                resolve(null);
+            } else {
+                reject(error);
+            }
+        });
+    });
 }
 
 function proceedSaveAfterPhoto() {
@@ -1776,11 +1913,17 @@ function proceedSaveAfterPhoto() {
     }
 }
 
-function updatePhotoIndicator(hasPhoto) {
+/**
+ * Update indicator foto dengan status yang berbeda
+ * @param {boolean} hasPhoto 
+ * @param {string} status - 'linked' (sudah di Drive), 'pending' (menunggu upload), 'offline', null
+ */
+function updatePhotoIndicator(hasPhoto, status = null) {
     const paramCard = document.querySelector('.param-card');
     if (!paramCard) return;
     
     let indicator = paramCard.querySelector('.photo-indicator');
+    
     if (hasPhoto) {
         if (!indicator) {
             indicator = document.createElement('div');
@@ -1789,8 +1932,6 @@ function updatePhotoIndicator(hasPhoto) {
                 position: absolute;
                 top: 12px;
                 right: 12px;
-                background: #10b981;
-                color: white;
                 padding: 4px 8px;
                 border-radius: 12px;
                 font-size: 0.75rem;
@@ -1798,10 +1939,29 @@ function updatePhotoIndicator(hasPhoto) {
                 align-items: center;
                 gap: 4px;
                 z-index: 10;
+                font-weight: 600;
             `;
-            indicator.innerHTML = '📸 Ada Foto';
             paramCard.style.position = 'relative';
             paramCard.appendChild(indicator);
+        }
+        
+        // Style berdasarkan status
+        if (status === 'linked') {
+            indicator.style.background = '#10b981'; // Hijau
+            indicator.style.color = 'white';
+            indicator.innerHTML = '☁️ Drive';
+        } else if (status === 'pending') {
+            indicator.style.background = '#f59e0b'; // Kuning
+            indicator.style.color = 'white';
+            indicator.innerHTML = '⏳ Pending';
+        } else if (status === 'offline') {
+            indicator.style.background = '#64748b'; // Abu
+            indicator.style.color = 'white';
+            indicator.innerHTML = '📱 Local';
+        } else {
+            indicator.style.background = '#3b82f6'; // Biru
+            indicator.style.color = 'white';
+            indicator.innerHTML = '📸 Ada';
         }
     } else if (indicator) {
         indicator.remove();
@@ -1841,7 +2001,7 @@ function renderMenu() {
     
     Object.entries(AREAS).forEach(([areaName, params]) => {
         const areaData = currentInput[areaName] || {};
-        const filled = Object.keys(areaData).length;
+        const filled = Object.keys(areaData).filter(k => !k.endsWith('_photoData') && !k.endsWith('_photoTime') && !k.endsWith('_photoOperator') && !k.endsWith('_photoUploaded') && !k.endsWith('_photoUrl')).length;
         const total = params.length;
         const percent = Math.round((filled / total) * 100);
         const isCompleted = filled === total && total > 0;
@@ -1851,6 +2011,9 @@ function renderMenu() {
             const firstLine = val.split('\n')[0];
             return ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         });
+        
+        // Cek apakah ada foto yang sudah diupload ke Drive
+        const hasDrivePhotos = Object.keys(areaData).some(k => k.endsWith('_photoUrl') && areaData[k]);
         
         if (isCompleted) completedAreas++;
         
@@ -1872,6 +2035,7 @@ function renderMenu() {
                     <div class="area-name">${areaName}</div>
                     <div class="area-meta ${hasAbnormal ? 'warning' : ''}">
                         ${hasAbnormal ? '⚠️ Ada parameter bermasalah • ' : ''}${filled} dari ${total} parameter
+                        ${hasDrivePhotos ? ' • ☁️ Drive' : ''}
                     </div>
                 </div>
                 <div class="area-status">
@@ -1895,7 +2059,7 @@ function updateOverallProgress() {
     const totalAreas = Object.keys(AREAS).length;
     let completedAreas = 0;
     Object.entries(AREAS).forEach(([areaName, params]) => {
-        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
+        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).filter(k => !k.includes('_photo')).length : 0;
         if (filled === params.length && filled > 0) completedAreas++;
     });
     updateOverallProgressUI(completedAreas, totalAreas);
@@ -1939,19 +2103,43 @@ function renderProgressDots() {
         const isFilled = savedValue !== '';
         const hasIssue = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         const isActive = i === activeIdx;
-        const hasPhoto = currentInput[activeArea]?.[fullLabel + '_photo'] ? true : false;
+        
+        // Cek status foto
+        const hasPhotoData = currentInput[activeArea]?.[fullLabel + '_photoData'] ? true : false;
+        const photoUrl = currentInput[activeArea]?.[fullLabel + '_photoUrl'];
+        const isUploaded = currentInput[activeArea]?.[fullLabel + '_photoUploaded'];
         
         let className = '';
-        if (isActive) className = 'active';
-        else if (hasIssue) className = 'has-issue';
-        else if (isFilled) className = 'filled';
-        if (hasPhoto) className += ' has-photo';
+        let icon = '';
+        
+        if (isActive) {
+            className = 'active';
+        } else if (hasIssue) {
+            className = 'has-issue';
+            icon = '⚠️';
+        } else if (isFilled) {
+            className = 'filled';
+        }
+        
+        if (hasPhotoData) {
+            className += ' has-photo';
+            if (isUploaded && photoUrl) {
+                icon = '☁️'; // Sudah di Drive
+            } else {
+                icon = '📸'; // Local only
+            }
+        }
         
         let title = '';
         if (hasIssue) title = firstLine;
-        if (hasPhoto) title = title ? title + ' + 📸 Foto' : '📸 Ada foto bukti';
+        if (hasPhotoData) {
+            title = title ? title + ' + ' : '';
+            title += isUploaded ? 'Foto di Google Drive' : 'Foto tersimpan lokal';
+        }
         
-        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${title}" data-has-photo="${hasPhoto}"></div>`;
+        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${title}" style="position: relative;">
+            ${icon ? `<span style="position: absolute; top: -8px; right: -4px; font-size: 10px;">${icon}</span>` : ''}
+        </div>`;
     }
     container.innerHTML = html;
 }
@@ -2070,6 +2258,17 @@ function showStep() {
             unitDisplay.style.display = 'flex';
         }
         if (mainInputWrapper) mainInputWrapper.classList.remove('has-select');
+    }
+    
+    // Update photo indicator berdasarkan status yang tersimpan
+    const photoData = currentInput[activeArea]?.[fullLabel + '_photoData'];
+    const photoUrl = currentInput[activeArea]?.[fullLabel + '_photoUrl'];
+    const isUploaded = currentInput[activeArea]?.[fullLabel + '_photoUploaded'];
+    
+    if (photoData) {
+        updatePhotoIndicator(true, isUploaded && photoUrl ? 'linked' : 'pending');
+    } else {
+        updatePhotoIndicator(false);
     }
     
     loadAbnormalStatus(fullLabel);
@@ -2250,12 +2449,12 @@ function saveStep() {
     saveCurrentStep();
     
     const fullLabel = AREAS[activeArea][activeIdx];
-    const existingPhoto = currentInput[activeArea] && currentInput[activeArea][fullLabel + '_photo'];
+    const existingPhoto = currentInput[activeArea] && currentInput[activeArea][fullLabel + '_photoData'];
     
     if (existingPhoto) {
         proceedSaveAfterPhoto();
     } else {
-        if (confirm('📸 Ambil foto lokasi sebagai bukti pengisian?\n\nFoto akan disimpan sebagai jejak bahwa Anda berada di lokasi ini.')) {
+        if (confirm('📸 Ambil foto lokasi sebagai bukti pengisian?\n\nFoto akan diupload ke Google Drive.')) {
             const paramCamera = document.getElementById('paramCamera');
             if (paramCamera) {
                 paramCamera.click();
@@ -2279,44 +2478,103 @@ function goBack() {
     }
 }
 
+/**
+ * Kirim data logsheet ke Google Sheets
+ * Foto yang belum terupload akan diupload sekarang, dan URL Drive yang dikirim ke Sheet
+ */
 async function sendToSheet() {
     if (!requireAuth()) return;
     
-    const progress = showUploadProgress('Mengirim Logsheet & Foto...');
+    // Cek apakah ada foto yang belum diupload ke Drive
+    const pendingPhotos = [];
+    Object.entries(currentInput).forEach(([areaName, params]) => {
+        Object.keys(params).forEach(key => {
+            if (key.endsWith('_photoData') && !params[key.replace('_photoData', '_photoUploaded')]) {
+                pendingPhotos.push({
+                    area: areaName,
+                    param: key.replace('_photoData', ''),
+                    data: params[key],
+                    filename: `LOG_${new Date().toISOString().split('T')[0]}_${key.replace('_photoData', '').replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.jpg`
+                });
+            }
+        });
+    });
+    
+    const progress = showUploadProgress('Mengirim Logsheet & Upload Foto...');
     currentUploadController = new AbortController();
     
     const autoAbortTimeout = setTimeout(() => {
         if (currentUploadController) {
             currentUploadController.abort();
         }
-    }, 30000);
-    
-    let allParameters = {};
-    let photoCount = 0;
-    
-    Object.entries(currentInput).forEach(([areaName, params]) => {
-        Object.entries(params).forEach(([paramName, value]) => {
-            if (paramName.endsWith('_photo')) {
-                allParameters[paramName] = value;
-                photoCount++;
-            } else if (!paramName.endsWith('_photoTime') && !paramName.endsWith('_photoOperator')) {
-                allParameters[paramName] = value;
-            }
-        });
-    });
-    
-    const finalData = {
-        type: 'LOGSHEET_WITH_PHOTO',
-        Operator: currentUser ? currentUser.name : 'Unknown',
-        OperatorId: currentUser ? currentUser.id : 'Unknown',
-        PhotoCount: photoCount,
-        Timestamp: new Date().toISOString(),
-        ...allParameters
-    };
-    
-    console.log(`[SendToSheet] Sending ${photoCount} photos...`);
+    }, 120000); // 2 menit timeout untuk upload banyak foto
     
     try {
+        // Jika ada foto pending dan online, upload dulu ke Drive
+        if (pendingPhotos.length > 0 && navigator.onLine) {
+            progress.updateText(`Mengupload ${pendingPhotos.length} foto ke Drive...`);
+            
+            // Upload semua foto pending
+            const uploadPromises = pendingPhotos.map(async (photo) => {
+                try {
+                    const result = await uploadSinglePhotoToDrive(photo.data, photo.filename);
+                    if (result && result.url) {
+                        // Update currentInput dengan URL
+                        currentInput[photo.area][photo.param + '_photoUrl'] = result.url;
+                        currentInput[photo.area][photo.param + '_photoUploaded'] = true;
+                        return { success: true, param: photo.param };
+                    }
+                } catch (e) {
+                    console.error('Failed upload:', photo.param, e);
+                    return { success: false, param: photo.param };
+                }
+            });
+            
+            await Promise.all(uploadPromises);
+            
+            // Simpan perubahan (URL foto) ke localStorage
+            localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+        }
+        
+        // Siapkan data untuk dikirim ke Sheet
+        let allParameters = {};
+        let photoCount = 0;
+        let driveLinks = []; // Array untuk menyimpan link Drive yang akan dimasukkan ke Sheet
+        
+        Object.entries(currentInput).forEach(([areaName, params]) => {
+            Object.entries(params).forEach(([paramName, value]) => {
+                // Hanya kirim nilai parameter (bukan metadata foto)
+                if (!paramName.endsWith('_photoData') && !paramName.endsWith('_photoTime') && 
+                    !paramName.endsWith('_photoOperator') && !paramName.endsWith('_photoUploaded')) {
+                    
+                    // Jika ini adalah URL foto, masukkan ke driveLinks
+                    if (paramName.endsWith('_photoUrl') && value) {
+                        driveLinks.push({
+                            parameter: paramName.replace('_photoUrl', ''),
+                            url: value
+                        });
+                        photoCount++;
+                    } else {
+                        // Parameter normal
+                        allParameters[paramName] = value;
+                    }
+                }
+            });
+        });
+        
+        // Tambahkan metadata logsheet
+        const finalData = {
+            type: 'LOGSHEET_WITH_DRIVE_PHOTOS',
+            Operator: currentUser ? currentUser.name : 'Unknown',
+            OperatorId: currentUser ? currentUser.id : 'Unknown',
+            PhotoCount: photoCount,
+            DriveLinks: driveLinks, // Array objek {parameter, url}
+            Timestamp: new Date().toISOString(),
+            ...allParameters
+        };
+        
+        progress.updateText('Menyimpan data ke Spreadsheet...');
+        
         await Promise.race([
             fetch(GAS_URL, {
                 method: 'POST',
@@ -2325,14 +2583,15 @@ async function sendToSheet() {
                 body: JSON.stringify(finalData),
                 signal: currentUploadController.signal
             }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Upload timeout')), 25000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Upload timeout')), 60000))
         ]);
         
         clearTimeout(autoAbortTimeout);
         progress.complete();
         
-        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto)`, 'success');
+        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto di Google Drive)`, 'success');
         
+        // Cleanup
         currentInput = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
         
@@ -2341,17 +2600,53 @@ async function sendToSheet() {
     } catch (error) {
         clearTimeout(autoAbortTimeout);
         console.error('[SendToSheet] Error:', error);
+        progress.error();
         
+        // Simpan ke offline queue
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
-        offlineData.push(finalData);
+        offlineData.push({
+            ...finalData,
+            pendingUpload: true,
+            savedAt: new Date().toISOString()
+        });
         localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengirim. Data & foto disimpan lokal.', 'error');
+            showCustomAlert('Gagal mengirim. Data & foto disimpan lokal untuk upload ulang.', 'error');
         }, 500);
     } finally {
         currentUploadController = null;
     }
+}
+
+/**
+ * Upload single photo ke Google Drive
+ * @param {string} base64Data 
+ * @param {string} filename 
+ */
+async function uploadSinglePhotoToDrive(base64Data, filename) {
+    return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('action', 'uploadToDrive');
+        formData.append('filename', filename);
+        formData.append('data', base64Data);
+        formData.append('mimeType', 'image/jpeg');
+        formData.append('folderName', 'Turbine_Logsheets_' + new Date().toISOString().split('T')[0]); // Folder per hari
+        
+        fetch(GAS_URL, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                resolve({ url: data.url, id: data.fileId });
+            } else {
+                reject(new Error(data.error));
+            }
+        })
+        .catch(reject);
+    });
 }
 
 // ============================================
@@ -3871,7 +4166,7 @@ function loadUserStats() {
     let completedAreas = 0;
     
     Object.entries(AREAS).forEach(([areaName, params]) => {
-        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).length : 0;
+        const filled = currentInput[areaName] ? Object.keys(currentInput[areaName]).filter(k => !k.includes('_photo')).length : 0;
         if (filled === params.length && filled > 0) completedAreas++;
     });
     
