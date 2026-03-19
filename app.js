@@ -34,7 +34,7 @@ const DRAFT_KEYS_CT = {
 };
 
 // URL Google Apps Script Backend
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwFbSYmZh2nEZPgWmdOUVsgHkppSaYxKdDY055TzRCsGUZ3aNJmOUA1aTEcLK2Sdtk/exec";
 
 // Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
