@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.4.9';
+const APP_VERSION = '1.5.0';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -675,6 +675,8 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
         
+        // PERBAIKAN: Deklarasikan variabel passwordInput sebelum digunakan
+        const passwordInput = document.getElementById('operatorPassword');
         if (passwordInput) passwordInput.value = '';
         
         // Trigger sync untuk admin setelah login berhasil
@@ -731,7 +733,20 @@ function updateUserCache(username, password, userData) {
         console.error('Error saving cache:', e);
     }
 }
-
+function updatePasswordInCache(username, newPassword) {
+    if (!username) return;
+    
+    const cache = loadUsersCache() || {};
+    const key = String(username).toLowerCase();
+    
+    if (cache[key]) {
+        cache[key].password = newPassword;
+        cache[key].lastSync = new Date().toISOString();
+        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
+        usersCache = cache;
+        console.log('Password updated in cache for:', username);
+    }
+}
 function loadUsersCache() {
     if (usersCache) return usersCache;
     try {
@@ -1532,27 +1547,31 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        // Gunakan JSONP untuk menghindari CORS
-        const result = await changePasswordJSONP(
-            currentUser.username, 
-            oldPassword, 
-            newPassword
-        );
+        const payload = {
+            type: 'CHANGE_PASSWORD',
+            username: currentUser.username,
+            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
+            newPassword: newPassword
+        };
         
-        if (result.success) {
-            // Update cache lokal HANYA jika server berhasil
-            updatePasswordInCache(currentUser.username, newPassword);
-            
-            showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
-            closeChangePasswordModal();
-            
-            setTimeout(() => {
-                logoutOperator();
-            }, 2000);
-        } else {
-            // Tampilkan error dari server (misal: "Password lama salah")
-            showCPError(result.error || 'Gagal mengubah password');
-        }
+        // Gunakan fetch dengan mode no-cors atau JSONP (pilih salah satu)
+        // Opsi A: Jika menggunakan fetch (dengan no-cors)
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        // PERBAIKAN: Update cache lokal
+        updatePasswordInCache(currentUser.username, newPassword);
+        
+        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
+        closeChangePasswordModal();
+        
+        setTimeout(() => {
+            logoutOperator();
+        }, 2000);
         
     } catch (error) {
         console.error('Error changing password:', error);
