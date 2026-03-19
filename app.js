@@ -2,7 +2,7 @@
 // TURBINE LOGSHEET PRO - FULL APPLICATION
 // Version: 1.4.2 (With CT Logsheet Feature)
 // ============================================
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.3';
 
 // ============================================
 // CONFIGURATION & CONSTANTS
@@ -48,7 +48,7 @@ const BALANCING_FIELDS = [
     'kegiatanShift'
 ];
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwoe646gRBt7Bkxr9YkMRvxUe8Q3jr8EsfmR4H_-7-_nRjt9QFWPAqiaNFM5UA-j0Zn/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzv_y2te44MqOlBhAs4_wRQKh4dYl3ip0BI1uha2wNLgu2H2LnB6V3K4svUMinpRmvB/exec";
 
 // Legacy users untuk fallback offline
 const OFFLINE_USERS = {
@@ -847,17 +847,34 @@ function renderUserList(users) {
     const container = document.getElementById('userListContainer');
     if (!container) return;
     
-    if (!users || users.length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 40px; color: #64748b;">Tidak ada user</div>';
+    // Filter out invalid users
+    const validUsers = users.filter(user => {
+        const isValid = user && user.username && typeof user.username === 'string';
+        if (!isValid) {
+            console.warn('Invalid user data:', user);
+        }
+        return isValid;
+    });
+    
+    if (validUsers.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #ef4444;">
+                ❌ Tidak ada data user valid<br>
+                <small style="color: #64748b;">Pastikan sheet USERS memiliki kolom: Username, Password, Role, Name, Department, Status</small><br><br>
+                <button onclick="showAddUserForm()" style="padding: 12px 24px; background: #10b981; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                    ➕ Tambah User Manual
+                </button>
+            </div>
+        `;
         return;
     }
     
     let html = '<div style="display: flex; flex-direction: column; gap: 12px;">';
     
-    users.forEach(user => {
+    validUsers.forEach(user => {
+        const isCurrentUser = user.username.toLowerCase() === (currentUser?.username || '').toLowerCase();
         const isActive = user.status === 'ACTIVE';
         const isAdmin = user.role === 'admin';
-        const isCurrentUser = user.username.toLowerCase() === (currentUser.username || '').toLowerCase();
         
         html += `
             <div style="background: rgba(30, 41, 59, 0.8); border: 1px solid ${isActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}; border-radius: 12px; padding: 16px;">
@@ -873,7 +890,7 @@ function renderUserList(users) {
                     </div>
                     <div style="display: flex; gap: 4px;">
                         <span style="padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; background: ${isAdmin ? 'rgba(245, 158, 11, 0.2)' : 'rgba(100, 116, 139, 0.2)'}; color: ${isAdmin ? '#f59e0b' : '#94a3b8'};">
-                            ${user.role}
+                            ${user.role || 'operator'}
                         </span>
                         <span style="padding: 4px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; background: ${isActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}; color: ${isActive ? '#10b981' : '#ef4444'};">
                             ${user.status || 'ACTIVE'}
@@ -882,8 +899,8 @@ function renderUserList(users) {
                 </div>
                 
                 <div style="background: rgba(239, 68, 68, 0.05); border: 1px dashed rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
-                    <div style="font-size: 0.75rem; color: #ef4444; margin-bottom: 4px; font-weight: 600;">🔓 Password (Plaintext):</div>
-                    <div style="font-family: monospace; font-size: 0.875rem; color: #f87171; letter-spacing: 1px;">${user.password}</div>
+                    <div style="font-size: 0.75rem; color: #ef4444; margin-bottom: 4px; font-weight: 600;">🔓 Password:</div>
+                    <div style="font-family: monospace; font-size: 0.875rem; color: #f87171; letter-spacing: 1px;">${user.password || 'N/A'}</div>
                 </div>
                 
                 <div style="display: flex; gap: 8px;">
@@ -903,11 +920,22 @@ function renderUserList(users) {
     html += '</div>';
     container.innerHTML = html;
 }
-
 function updateUsersCache(usersArray) {
     let cache = {};
     usersArray.forEach(user => {
-        cache[user.username.toLowerCase()] = user;
+        if (user && user.username && typeof user.username === 'string') {
+            cache[user.username.toLowerCase()] = {
+                username: user.username,
+                password: user.password || '',
+                role: user.role || 'operator',
+                name: user.name || user.username,
+                department: user.department || 'Unit Utilitas 3B',
+                status: user.status || 'ACTIVE',
+                lastSync: new Date().toISOString()
+            };
+        } else {
+            console.warn('Skipping invalid user in cache:', user);
+        }
     });
     localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
     usersCache = cache;
