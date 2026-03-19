@@ -2,7 +2,7 @@
 // TURBINE LOGSHEET PRO - FULL APPLICATION
 // Version: 1.4.2 (With CT Logsheet Feature)
 // ============================================
-const APP_VERSION = '1.4.3';
+const APP_VERSION = '1.4.4';
 
 // ============================================
 // CONFIGURATION & CONSTANTS
@@ -1487,9 +1487,12 @@ function navigateTo(screenId) {
         if (screenId === 'areaListScreen') {
             fetchLastData();
             updateOverallProgress();
-        } else if (screenId === 'homeScreen') {
-            loadUserStats();
-            setTimeout(addAdminButton, 100);
+        } else  if (screenId === 'homeScreen') {
+        loadUserStats();
+        setTimeout(() => {
+            addAdminButton();           // <-- sudah ada
+            addChangePasswordButton();  // <-- TAMBAHKAN INI
+        }, 100);
         } else if (screenId === 'balancingScreen') {
             initBalancingScreen();
         } else if (screenId === 'ctAreaListScreen') {
@@ -3767,4 +3770,187 @@ document.addEventListener('keydown', (e) => {
             goBackCT();
         }
     }
+// ============================================
+// CHANGE PASSWORD FUNCTIONS
+// ============================================
+
+function showChangePasswordModal() {
+    if (!currentUser) {
+        showCustomAlert('Silakan login terlebih dahulu', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('changePasswordModal');
+    const usernameSpan = document.getElementById('cpUsername');
+    const oldPasswordGroup = document.getElementById('oldPasswordGroup');
+    const form = document.getElementById('changePasswordForm');
+    
+    if (usernameSpan) usernameSpan.textContent = currentUser.username;
+    
+    // Jika admin, sembunyikan field password lama
+    if (currentUser.role === 'admin') {
+        if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
+        const oldPassInput = document.getElementById('cpOldPassword');
+        if(oldPassInput) oldPassInput.removeAttribute('required');
+    } else {
+        if (oldPasswordGroup) oldPasswordGroup.style.display = 'block';
+        const oldPassInput = document.getElementById('cpOldPassword');
+        if(oldPassInput) oldPassInput.setAttribute('required', 'true');
+    }
+    
+    if(form) form.reset();
+    hideCPError();
+    
+    if (modal) modal.classList.remove('hidden');
+    
+    setTimeout(() => {
+        if (currentUser.role === 'admin') {
+            document.getElementById('cpNewPassword')?.focus();
+        } else {
+            document.getElementById('cpOldPassword')?.focus();
+        }
+    }, 100);
+    
+    if(form) form.onsubmit = handleChangePasswordSubmit;
+}
+
+function closeChangePasswordModal() {
+    const modal = document.getElementById('changePasswordModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function toggleCPVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input || !btn) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🙈';
+    } else {
+        input.type = 'password';
+        btn.textContent = '👁️';
+    }
+}
+
+function showCPError(message) {
+    const errorDiv = document.getElementById('cpError');
+    if (errorDiv) {
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+    }
+}
+
+function hideCPError() {
+    const errorDiv = document.getElementById('cpError');
+    if (errorDiv) {
+        errorDiv.style.display = 'none';
+        errorDiv.textContent = '';
+    }
+}
+
+async function handleChangePasswordSubmit(e) {
+    e.preventDefault();
+    hideCPError();
+    
+    const oldPassword = document.getElementById('cpOldPassword')?.value || '';
+    const newPassword = document.getElementById('cpNewPassword')?.value || '';
+    const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
+    
+    if (newPassword.length < 4) {
+        showCPError('Password baru minimal 4 karakter');
+        return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+        showCPError('Password baru dan konfirmasi tidak cocok');
+        return;
+    }
+    
+    if (currentUser.role !== 'admin' && oldPassword === newPassword) {
+        showCPError('Password baru tidak boleh sama dengan password lama');
+        return;
+    }
+    
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const originalText = submitBtn ? submitBtn.textContent : 'Simpan';
+    if(submitBtn) {
+        submitBtn.textContent = '⏳ Menyimpan...';
+        submitBtn.disabled = true;
+    }
+    
+    try {
+        const payload = {
+            type: 'CHANGE_PASSWORD',
+            username: currentUser.username,
+            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
+            newPassword: newPassword
+        };
+        
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        updatePasswordInCache(currentUser.username, newPassword);
+        
+        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
+        closeChangePasswordModal();
+        
+        setTimeout(() => {
+            logoutOperator();
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Error changing password:', error);
+        showCPError('Gagal mengubah password. Periksa koneksi.');
+    } finally {
+        if(submitBtn) {
+            submitBtn.textContent = originalText;
+            submitBtn.disabled = false;
+        }
+    }
+}
+
+function updatePasswordInCache(username, newPassword) {
+    const cache = loadUsersCache() || {};
+    const key = username.toLowerCase();
+    if (cache[key]) {
+        cache[key].password = newPassword;
+        cache[key].lastSync = new Date().toISOString();
+        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
+    }
+}
+
+function addChangePasswordButton() {
+    const menuGrid = document.querySelector('.menu-grid');
+    if (!menuGrid || document.getElementById('changePasswordBtn')) return;
+    
+    const btn = document.createElement('div');
+    btn.id = 'changePasswordBtn';
+    btn.className = 'menu-card';
+    btn.style.cssText = 'border-left: 4px solid #f59e0b; cursor: pointer; margin-top: 12px;';
+    btn.onclick = showChangePasswordModal;
+    
+    btn.innerHTML = `
+        <div class="menu-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                <circle cx="12" cy="16" r="1"/>
+            </svg>
+        </div>
+        <div class="menu-content">
+            <h3>Ganti Password</h3>
+            <p>Ubah password akun Anda</p>
+        </div>
+        <div class="menu-arrow">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6"/>
+            </svg>
+        </div>
+    `;
+    
+    menuGrid.appendChild(btn);
+}
 });
