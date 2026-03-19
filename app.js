@@ -1511,6 +1511,7 @@ function hideCPError() {
     }
 }
 
+// Ganti fungsi handleChangePasswordSubmit dengan ini:
 async function handleChangePasswordSubmit(e) {
     e.preventDefault();
     hideCPError();
@@ -1524,18 +1525,13 @@ async function handleChangePasswordSubmit(e) {
     const newPassword = document.getElementById('cpNewPassword')?.value || '';
     const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
     
+    // Validasi input...
     if (newPassword.length < 4) {
         showCPError('Password baru minimal 4 karakter');
         return;
     }
-    
     if (newPassword !== confirmPassword) {
         showCPError('Password baru dan konfirmasi tidak cocok');
-        return;
-    }
-    
-    if (currentUser.role !== 'admin' && oldPassword === newPassword) {
-        showCPError('Password baru tidak boleh sama dengan password lama');
         return;
     }
     
@@ -1547,34 +1543,29 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        const payload = {
-            type: 'CHANGE_PASSWORD',
-            username: currentUser.username,
-            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
-            newPassword: newPassword
-        };
+        // Gunakan JSONP untuk bisa membaca response
+        const result = await changePasswordJSONP(
+            currentUser.username,
+            currentUser.role === 'admin' ? '' : oldPassword,
+            newPassword
+        );
         
-        // Gunakan fetch dengan mode no-cors atau JSONP (pilih salah satu)
-        // Opsi A: Jika menggunakan fetch (dengan no-cors)
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        // PERBAIKAN: Update cache lokal
-        updatePasswordInCache(currentUser.username, newPassword);
-        
-        showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
-        closeChangePasswordModal();
-        
-        setTimeout(() => {
-            logoutOperator();
-        }, 2000);
+        if (result.success) {
+            // Update cache lokal
+            updatePasswordInCache(currentUser.username, newPassword);
+            
+            showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
+            closeChangePasswordModal();
+            
+            setTimeout(() => {
+                logoutOperator();
+            }, 2000);
+        } else {
+            showCPError(result.error || 'Gagal mengubah password');
+        }
         
     } catch (error) {
-        console.error('Error changing password:', error);
+        console.error('Error:', error);
         showCPError('Gagal mengubah password. Periksa koneksi internet.');
     } finally {
         if(submitBtn) {
@@ -1584,7 +1575,7 @@ async function handleChangePasswordSubmit(e) {
     }
 }
 
-// Fungsi JSONP untuk Change Password
+// Pastikan fungsi JSONP ini ada (sudah ada di kode Anda tapi perlu dipastikan):
 function changePasswordJSONP(username, oldPassword, newPassword) {
     return new Promise((resolve, reject) => {
         const callbackName = 'cpCallback_' + Date.now();
@@ -1600,7 +1591,6 @@ function changePasswordJSONP(username, oldPassword, newPassword) {
         };
         
         const script = document.createElement('script');
-        // Gunakan GET dengan parameter password di URL (encoded)
         script.src = `${GAS_URL}?action=changePassword&username=${encodeURIComponent(username)}&oldPassword=${encodeURIComponent(oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`;
         
         script.onerror = () => {
