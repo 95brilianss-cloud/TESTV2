@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -265,6 +265,9 @@ let uploadProgressInterval = null;
 let currentUploadController = null;
 let deferredPrompt = null;
 let installBannerShown = false;
+// TAMBAHKAN INI (State untuk foto parameter)
+let pendingSaveAction = null;
+let currentParamPhoto = null;
 
 // CT State Variables
 let lastDataCT = {};
@@ -1749,6 +1752,100 @@ function cancelUpload() {
 // 11. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 
+// 11.1 FUNGSI FOTO PARAMETER (BARU)
+
+function initParamCameraListener() {
+    const paramCamera = document.getElementById('paramCamera');
+    if (paramCamera) {
+        paramCamera.addEventListener('change', handleParamPhoto);
+    }
+}
+
+function handleParamPhoto(event) {
+    const file = event.target.files[0];
+    if (!file) {
+        proceedSaveAfterPhoto();
+        return;
+    }
+    
+    if (file.size > 3 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 3MB.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const base64Photo = e.target.result;
+        const fullLabel = AREAS[activeArea][activeIdx];
+        
+        if (!currentInput[activeArea]) currentInput[activeArea] = {};
+        
+        currentInput[activeArea][fullLabel + '_photo'] = base64Photo;
+        currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
+        currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
+        
+        localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+        updatePhotoIndicator(true);
+        
+        showCustomAlert('📸 Foto bukti berhasil disimpan!', 'success');
+        
+        setTimeout(() => {
+            proceedSaveAfterPhoto();
+        }, 500);
+    };
+    
+    reader.onerror = function() {
+        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
+    };
+    
+    reader.readAsDataURL(file);
+}
+
+function proceedSaveAfterPhoto() {
+    if (activeIdx < AREAS[activeArea].length - 1) {
+        activeIdx++;
+        showStep();
+        renderProgressDots();
+        updatePhotoIndicator(false);
+    } else {
+        showCustomAlert(`✓ Area ${activeArea} selesai diisi!`, 'success');
+        setTimeout(() => navigateTo('areaListScreen'), 1500);
+    }
+}
+
+function updatePhotoIndicator(hasPhoto) {
+    const paramCard = document.querySelector('.param-card');
+    if (!paramCard) return;
+    
+    let indicator = paramCard.querySelector('.photo-indicator');
+    if (hasPhoto) {
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'photo-indicator';
+            indicator.style.cssText = `
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                background: #10b981;
+                color: white;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-size: 0.75rem;
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                z-index: 10;
+            `;
+            indicator.innerHTML = '📸 Ada Foto';
+            paramCard.style.position = 'relative';
+            paramCard.appendChild(indicator);
+        }
+    } else if (indicator) {
+        indicator.remove();
+    }
+}
+
 function fetchLastData() {
     updateStatusIndicator(false);
     const timeout = setTimeout(() => renderMenu(), 8000);
@@ -1885,12 +1982,21 @@ function renderProgressDots() {
         const hasIssue = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         const isActive = i === activeIdx;
         
+        // Cek apakah ada foto untuk parameter ini
+        const hasPhoto = currentInput[activeArea]?.[fullLabel + '_photo'] ? true : false;
+        
         let className = '';
         if (isActive) className = 'active';
         else if (hasIssue) className = 'has-issue';
         else if (isFilled) className = 'filled';
+        if (hasPhoto) className += ' has-photo';
         
-        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${hasIssue ? firstLine : ''}"></div>`;
+        // TAMBAHKAN title attribute untuk tooltip
+        let title = '';
+        if (hasIssue) title = firstLine;
+        if (hasPhoto) title = title ? title + ' + 📸 Foto' : '📸 Ada foto bukti';
+        
+        html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${title}" data-has-photo="${hasPhoto}"></div>`;
     }
     container.innerHTML = html;
 }
@@ -2186,17 +2292,34 @@ function saveCurrentStep() {
 }
 
 function saveStep() {
+    // 1. Simpan nilai input terlebih dahulu
     saveCurrentStep();
     
-    if (activeIdx < AREAS[activeArea].length - 1) {
-        activeIdx++;
-        showStep();
+    const fullLabel = AREAS[activeArea][activeIdx];
+    
+    // 2. Cek apakah sudah ada foto untuk parameter ini
+    const existingPhoto = currentInput[activeArea] && currentInput[activeArea][fullLabel + '_photo'];
+    
+    if (existingPhoto) {
+        // Jika sudah ada foto, langsung lanjut
+        proceedSaveAfterPhoto();
     } else {
-        showCustomAlert(`Area ${activeArea} selesai diisi!`, 'success');
-        setTimeout(() => navigateTo('areaListScreen'), 1500);
+        // 3. Minta konfirmasi untuk ambil foto bukti
+        if (confirm('📸 Ambil foto lokasi sebagai bukti pengisian?\n\nFoto akan disimpan sebagai jejak bahwa Anda berada di lokasi ini.')) {
+            const paramCamera = document.getElementById('paramCamera');
+            if (paramCamera) {
+                paramCamera.click();
+                // Proses selanjutnya akan ditangani oleh handleParamPhoto
+            } else {
+                proceedSaveAfterPhoto();
+            }
+        } else {
+            // User memilih tidak ambil foto, tetap lanjut
+            console.log('User menyimpan tanpa foto bukti');
+            proceedSaveAfterPhoto();
+        }
     }
 }
-
 function goBack() {
     saveCurrentStep();
     
@@ -2211,24 +2334,37 @@ function goBack() {
 async function sendToSheet() {
     if (!requireAuth()) return;
     
-    const progress = showUploadProgress('Mengirim Logsheet...');
+    // Cek apakah ada data foto yang perlu dikirim
+    const progress = showUploadProgress('Mengirim Logsheet & Foto...');
     currentUploadController = new AbortController();
     
+    // Persiapkan data dengan foto
     let allParameters = {};
+    let photoCount = 0;
+    
     Object.entries(currentInput).forEach(([areaName, params]) => {
         Object.entries(params).forEach(([paramName, value]) => {
-            allParameters[paramName] = value;
+            // Khusus untuk foto, kita kirim sebagai base64 dengan metadata
+            if (paramName.endsWith('_photo')) {
+                allParameters[paramName] = value;
+                photoCount++;
+            } else if (!paramName.endsWith('_photoTime') && !paramName.endsWith('_photoOperator')) {
+                // Data normal (bukan metadata foto)
+                allParameters[paramName] = value;
+            }
         });
     });
     
     const finalData = {
-        type: 'LOGSHEET',
+        type: 'LOGSHEET_WITH_PHOTO',
         Operator: currentUser ? currentUser.name : 'Unknown',
         OperatorId: currentUser ? currentUser.id : 'Unknown',
+        PhotoCount: photoCount,
+        Timestamp: new Date().toISOString(),
         ...allParameters
     };
     
-    console.log('Sending Logsheet Data:', finalData);
+    console.log(`Sending Logsheet Data dengan ${photoCount} foto...`);
     
     try {
         await fetch(GAS_URL, {
@@ -2240,8 +2376,9 @@ async function sendToSheet() {
         });
         
         progress.complete();
-        showCustomAlert('✓ Data berhasil dikirim ke sistem!', 'success');
+        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto bukti)`, 'success');
         
+        // Clear draft
         currentInput = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
         
@@ -2251,12 +2388,13 @@ async function sendToSheet() {
         console.error('Error sending data:', error);
         progress.error();
         
+        // Simpan ke offline storage
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
         offlineData.push(finalData);
         localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
+            showCustomAlert('Gagal mengirim. Data & foto disimpan lokal.', 'error');
         }, 500);
     }
 }
@@ -3945,6 +4083,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initAuth();
     setupLoginListeners();
     setupTPMListeners();
+    initParamCameraListener();
     
     simulateLoading();
     
