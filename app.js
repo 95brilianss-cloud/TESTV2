@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.4.8';
+const APP_VERSION = '1.4.9';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -34,7 +34,7 @@ const DRAFT_KEYS_CT = {
 };
 
 // URL Google Apps Script Backend
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzpM7ueIepzWdIDm7yrE6enRwMuRCyeyL6baUUXHZ5XkYwIEvkmU9xWufLNgVnBQmRi/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
 
 // Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
@@ -1532,21 +1532,12 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        const payload = {
-            type: 'CHANGE_PASSWORD',
-            username: currentUser.username,
-            oldPassword: currentUser.role === 'admin' ? '' : oldPassword,
-            newPassword: newPassword
-        };
-        
-        // HAPUS mode: 'no-cors' agar bisa membaca response
-        const response = await fetch(GAS_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        const result = await response.json();
+        // Gunakan JSONP untuk menghindari CORS
+        const result = await changePasswordJSONP(
+            currentUser.username, 
+            oldPassword, 
+            newPassword
+        );
         
         if (result.success) {
             // Update cache lokal HANYA jika server berhasil
@@ -1574,18 +1565,33 @@ async function handleChangePasswordSubmit(e) {
     }
 }
 
-function updatePasswordInCache(username, newPassword) {
-    if (!username) return;
-    
-    const cache = loadUsersCache() || {};
-    const key = String(username).toLowerCase();
-    
-    if (cache[key]) {
-        cache[key].password = newPassword;
-        cache[key].lastSync = new Date().toISOString();
-        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
-        usersCache = cache;
-    }
+// Fungsi JSONP untuk Change Password
+function changePasswordJSONP(username, oldPassword, newPassword) {
+    return new Promise((resolve, reject) => {
+        const callbackName = 'cpCallback_' + Date.now();
+        const timeout = setTimeout(() => {
+            cleanupJSONP(callbackName);
+            reject(new Error('Timeout'));
+        }, 10000);
+        
+        window[callbackName] = (response) => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            resolve(response);
+        };
+        
+        const script = document.createElement('script');
+        // Gunakan GET dengan parameter password di URL (encoded)
+        script.src = `${GAS_URL}?action=changePassword&username=${encodeURIComponent(username)}&oldPassword=${encodeURIComponent(oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`;
+        
+        script.onerror = () => {
+            clearTimeout(timeout);
+            cleanupJSONP(callbackName);
+            reject(new Error('Network error'));
+        };
+        
+        document.body.appendChild(script);
+    });
 }
 
 // ============================================
