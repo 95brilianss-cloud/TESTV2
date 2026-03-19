@@ -1,20 +1,17 @@
 // ============================================
 // TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.4.7 (Fixed Sync & Structure)
+// Version: 1.5.5 (Fixed Sync & Compression)
 // ============================================
 
-// ============================================
-// 1. KONFIGURASI & KONSTANTA
-// ============================================
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.5.5';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
     SESSION_KEY: 'turbine_session',
     USER_KEY: 'turbine_user',
     USERS_CACHE_KEY: 'turbine_users_cache',
-    SESSION_DURATION: 8 * 60 * 60 * 1000,        // 8 jam
-    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000  // 30 hari
+    SESSION_DURATION: 8 * 60 * 60 * 1000,
+    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000
 };
 
 const DRAFT_KEYS = {
@@ -33,17 +30,14 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-// URL Google Apps Script Backend
 const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
 
-// Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
     'operator': { password: 'operator123', role: 'operator', name: 'Operator Shift', department: 'Unit Utilitas 3B' },
     'utilitas3b': { password: 'pgresik2024', role: 'operator', name: 'Unit Utilitas 3B', department: 'Unit Utilitas 3B' }
 };
 
-// Field configuration untuk Balancing
 const BALANCING_FIELDS = [
     'balancingDate', 'balancingTime',
     'loadMW', 'eksporMW',
@@ -64,7 +58,6 @@ const BALANCING_FIELDS = [
 // 2. DATA STRUKTUR AREA
 // ============================================
 
-// Struktur Area Turbine Logsheet
 const AREAS = {
     "Steam Inlet Turbine": [
         "MPS Inlet 30-TP-6101 PI-6114 (kg/cm2)", 
@@ -196,7 +189,6 @@ const AREAS = {
     ]
 };
 
-// Struktur Area CT Logsheet
 const AREAS_CT = {
     "BASIN SA": [
         "D-6511 LEVEL BASIN",
@@ -265,11 +257,9 @@ let uploadProgressInterval = null;
 let currentUploadController = null;
 let deferredPrompt = null;
 let installBannerShown = false;
-// TAMBAHKAN INI (State untuk foto parameter)
 let pendingSaveAction = null;
 let currentParamPhoto = null;
 
-// CT State Variables
 let lastDataCT = {};
 let currentInputCT = {};
 let activeAreaCT = "";
@@ -278,10 +268,9 @@ let totalParamsCT = 0;
 let currentInputTypeCT = 'text';
 
 // ============================================
-// 4. INITIALIZATION & SERVICE WORKER
+// 4. INITIALIZATION
 // ============================================
 
-// Inisialisasi data dari localStorage
 function initState() {
     try {
         const savedDraft = localStorage.getItem(DRAFT_KEYS.LOGSHEET);
@@ -297,7 +286,6 @@ function initState() {
     }
 }
 
-// Register Service Worker untuk PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
@@ -323,20 +311,9 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================
-// 5. UTILITY FUNCTIONS
-// ============================================
-// ============================================
-// KOMPRESI GAMBAR OTOMATIS
+// 5. UTILITY FUNCTIONS & COMPRESSION
 // ============================================
 
-/**
- * Mengkompres gambar base64 dengan canvas
- * @param {string} base64Image - Data URL gambar
- * @param {number} maxWidth - Lebar maksimum (default: 1280)
- * @param {number} quality - Kualitas JPEG (0-1, default: 0.8)
- * @param {number} maxSizeMB - Ukuran maksimum dalam MB
- * @returns {Promise<string>} Base64 terkompresi
- */
 async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSizeMB = 2.5) {
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -347,30 +324,22 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
             let width = img.width;
             let height = img.height;
             
-            // Hitung ratio jika lebih besar dari maxWidth
             if (width > maxWidth) {
                 height = Math.round(height * (maxWidth / width));
                 width = maxWidth;
             }
             
-            // Setup canvas
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
-            
-            // Background putih untuk transparansi
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, width, height);
-            
-            // Gambar
             ctx.drawImage(img, 0, 0, width, height);
             
-            // Kompresi dengan penyesuaian kualitas
             let compressed = canvas.toDataURL('image/jpeg', quality);
             let currentQuality = quality;
             const maxBytes = maxSizeMB * 1024 * 1024;
             
-            // Iterasi kompresi jika masih terlalu besar
             let attempts = 0;
             while (getBase64Size(compressed) > maxBytes && attempts < 5 && currentQuality > 0.3) {
                 currentQuality -= 0.1;
@@ -381,30 +350,93 @@ async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSiz
             resolve(compressed);
         };
         
-        img.onerror = function() {
-            reject(new Error('Gagal memuat gambar'));
-        };
+        img.onerror = () => reject(new Error('Gagal memuat gambar'));
     });
 }
 
-/**
- * Mendapatkan ukuran file base64 dalam bytes
- */
 function getBase64Size(base64String) {
     const base64Length = base64String.split(',')[1].length;
     const padding = (base64String.endsWith('==')) ? 2 : (base64String.endsWith('=')) ? 1 : 0;
     return (base64Length * 0.75) - padding;
 }
 
-/**
- * Format ukuran file ke string readable
- */
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Safe Fetch & JSONP
+function safeJSONP(url, callbackName, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        let isResolved = false;
+        const cleanup = () => {
+            isResolved = true;
+            cleanupJSONP(callbackName);
+            const scripts = document.querySelectorAll('script');
+            scripts.forEach(script => {
+                if (script.src && script.src.includes(`callback=${callbackName}`)) {
+                    if (script.parentNode) script.remove();
+                }
+            });
+        };
+        
+        const timeoutId = setTimeout(() => {
+            if (!isResolved) {
+                cleanup();
+                reject(new Error('JSONP Timeout'));
+            }
+        }, timeoutMs);
+        
+        window[callbackName] = (response) => {
+            if (!isResolved) {
+                cleanup();
+                clearTimeout(timeoutId);
+                resolve(response || { success: true });
+            }
+        };
+        
+        const script = document.createElement('script');
+        script.src = url;
+        script.onerror = () => {
+            if (!isResolved) {
+                cleanup();
+                clearTimeout(timeoutId);
+                reject(new Error('Network error'));
+            }
+        };
+        
+        setTimeout(() => {
+            if (!isResolved) {
+                console.warn(`[SafeJSONP] Emergency cleanup for ${callbackName}`);
+                cleanup();
+                clearTimeout(timeoutId);
+                reject(new Error('Emergency timeout'));
+            }
+        }, timeoutMs + 2000);
+        
+        document.body.appendChild(script);
+    });
+}
+
+function emergencyResetUpload() {
+    console.log('[Emergency] Resetting upload state...');
+    if (uploadProgressInterval) {
+        clearInterval(uploadProgressInterval);
+        uploadProgressInterval = null;
+    }
+    currentUploadController = null;
+    hideUploadProgress();
+    showCustomAlert('Sinkronisasi dihentikan. Silakan coba lagi.', 'warning');
+}
+
+function cleanupJSONP(callbackName) {
+    if (window[callbackName]) {
+        try { delete window[callbackName]; } 
+        catch (e) { window[callbackName] = undefined; }
+    }
 }
 
 function showUpdateAlert() {
@@ -427,7 +459,6 @@ function showCustomAlert(msg, type = 'success') {
     const alertIconWrapper = document.getElementById('alertIconWrapper');
     
     if (!customAlert || !alertContent || !alertTitle || !alertMessage || !alertIconWrapper) {
-        console.error('Alert elements not found');
         alert(msg);
         return;
     }
@@ -448,7 +479,6 @@ function showCustomAlert(msg, type = 'success') {
     alertMessage.innerText = msg;
     alertContent.className = 'alert-content ' + type;
     
-    // Set icon berdasarkan tipe
     const icons = {
         success: `<div class="alert-icon-bg"></div><svg class="alert-icon-svg" viewBox="0 0 52 52"><circle cx="26" cy="26" r="25"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>`,
         error: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #ef4444"><circle cx="26" cy="26" r="25"/><path d="M16 16 L36 36 M36 16 L16 36"/></svg>`,
@@ -489,7 +519,6 @@ function navigateTo(screenId) {
         targetScreen.classList.add('active');
         window.scrollTo(0, 0);
         
-        // Screen-specific initialization
         if (screenId === 'homeScreen') {
             loadUserStats();
             setTimeout(() => {
@@ -625,10 +654,14 @@ async function loginOperator() {
     
     let onlineSuccess = false;
     
-    // Coba login online dulu
     if (navigator.onLine) {
         try {
-            const result = await validateUserOnline(username, password);
+            const callbackName = 'loginCallback_' + Date.now();
+            const result = await safeJSONP(
+                `${GAS_URL}?action=login&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&callback=${callbackName}`,
+                callbackName,
+                10000
+            );
             
             if (result.success) {
                 onlineSuccess = true;
@@ -641,12 +674,11 @@ async function loginOperator() {
         }
     }
     
-    // Jika online gagal atau offline, coba dari cache/legacy
     const offlineResult = validateUserOffline(username, password);
     
     if (offlineResult.success) {
         handleLoginSuccess(offlineResult.user, username, password, true);
-        showCustomAlert(navigator.onLine ? 'Login offline berhasil! (Mode Local)' : 'Login offline (tidak ada koneksi)', navigator.onLine ? 'warning' : 'info');
+        showCustomAlert(navigator.onLine ? 'Login offline berhasil!' : 'Login offline (tidak ada koneksi)', navigator.onLine ? 'warning' : 'info');
     } else {
         showLoginError(offlineResult.error || 'Login gagal. Periksa koneksi atau username/password.');
         if (loginBtn) {
@@ -654,32 +686,6 @@ async function loginOperator() {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
     }
-}
-
-function validateUserOnline(username, password) {
-    return new Promise((resolve, reject) => {
-        const callbackName = 'loginCallback_' + Date.now();
-        const timeout = setTimeout(() => {
-            reject(new Error('Timeout'));
-        }, 10000);
-        
-        window[callbackName] = (response) => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            resolve(response);
-        };
-        
-        const script = document.createElement('script');
-        script.src = `${GAS_URL}?action=login&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&callback=${callbackName}`;
-        
-        script.onerror = () => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            reject(new Error('Network error'));
-        };
-        
-        document.body.appendChild(script);
-    });
 }
 
 function validateUserOffline(username, password) {
@@ -737,7 +743,6 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
     };
     
     isAuthenticated = true;
-    
     saveSession(currentUser, false);
     localStorage.setItem(AUTH_CONFIG.USER_KEY, JSON.stringify(currentUser));
     
@@ -759,11 +764,9 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
         
-        // PERBAIKAN: Deklarasikan variabel passwordInput sebelum digunakan
         const passwordInput = document.getElementById('operatorPassword');
         if (passwordInput) passwordInput.value = '';
         
-        // Trigger sync untuk admin setelah login berhasil
         if (!isOffline && userData.role === 'admin') {
             setTimeout(syncUsersForOffline, 2000);
         }
@@ -817,9 +820,9 @@ function updateUserCache(username, password, userData) {
         console.error('Error saving cache:', e);
     }
 }
+
 function updatePasswordInCache(username, newPassword) {
     if (!username) return;
-    
     const cache = loadUsersCache() || {};
     const key = String(username).toLowerCase();
     
@@ -831,6 +834,7 @@ function updatePasswordInCache(username, newPassword) {
         console.log('Password updated in cache for:', username);
     }
 }
+
 function loadUsersCache() {
     if (usersCache) return usersCache;
     try {
@@ -925,7 +929,7 @@ function togglePasswordVisibility() {
 }
 
 // ============================================
-// 7. USER MANAGEMENT (ADMIN ONLY)
+// 7. USER MANAGEMENT
 // ============================================
 
 function addAdminButton() {
@@ -1007,19 +1011,11 @@ function showUserManagement() {
                     </svg>
                 </button>
             </div>
-            
             <div id="userListContainer" style="margin-bottom: 20px;">
-                <div style="text-align: center; padding: 40px; color: #64748b;">
-                    ⏳ Memuat data user...
-                </div>
+                <div style="text-align: center; padding: 40px; color: #64748b;">⏳ Memuat data user...</div>
             </div>
-            
-            <button onclick="showAddUserForm()" style="width: 100%; padding: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                Tambah User Baru
+            <button onclick="showAddUserForm()" style="width: 100%; padding: 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer;">
+                + Tambah User Baru
             </button>
         </div>
     `;
@@ -1042,7 +1038,12 @@ async function loadUserList() {
     if (!container) return;
     
     try {
-        const result = await fetchUsersFromServer();
+        const callbackName = 'usersCallback_' + Date.now();
+        const result = await safeJSONP(
+            `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`,
+            callbackName,
+            10000
+        );
         
         if (result.success) {
             renderUserList(result.users);
@@ -1061,46 +1062,9 @@ async function loadUserList() {
                 </div>
             `);
         } else {
-            container.innerHTML = `
-                <div style="text-align: center; padding: 40px; color: #ef4444;">
-                    ❌ Gagal memuat data user<br>
-                    <small style="color: #64748b;">${error.message}</small>
-                </div>
-            `;
+            container.innerHTML = `<div style="text-align: center; padding: 40px; color: #ef4444;">❌ Gagal memuat data user</div>`;
         }
     }
-}
-
-function fetchUsersFromServer() {
-    return new Promise((resolve, reject) => {
-        if (!currentUser || !currentUser.username) {
-            reject(new Error('Tidak ada user yang login'));
-            return;
-        }
-        
-        const callbackName = 'usersCallback_' + Date.now();
-        const timeout = setTimeout(() => {
-            cleanupJSONP(callbackName);
-            reject(new Error('Timeout'));
-        }, 10000);
-        
-        window[callbackName] = (response) => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            resolve(response);
-        };
-        
-        const script = document.createElement('script');
-        script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
-        
-        script.onerror = () => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            reject(new Error('Network error'));
-        };
-        
-        document.body.appendChild(script);
-    });
 }
 
 function renderUserList(users) {
@@ -1110,12 +1074,7 @@ function renderUserList(users) {
     const validUsers = users.filter(user => user && user.username && typeof user.username === 'string');
     
     if (validUsers.length === 0) {
-        container.innerHTML = `
-            <div style="text-align: center; padding: 40px; color: #ef4444;">
-                ❌ Tidak ada data user valid<br>
-                <small style="color: #64748b;">Pastikan sheet USERS memiliki kolom yang benar</small>
-            </div>
-        `;
+        container.innerHTML = `<div style="text-align: center; padding: 40px; color: #ef4444;">❌ Tidak ada data user valid</div>`;
         return;
     }
     
@@ -1292,15 +1251,23 @@ async function handleAddUser(e) {
     }
     
     try {
-        const result = await addUserToServer(formData);
+        await fetch(GAS_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'USER_MANAGEMENT',
+                action: 'add',
+                adminUser: currentUser.username,
+                adminPass: 'admin123',
+                userData: formData
+            })
+        });
         
-        if (result.success) {
-            showCustomAlert('User berhasil ditambahkan!', 'success');
-            restoreUserManagement();
-            updateUserCache(formData.username, formData.password, formData);
-        } else {
-            showCustomAlert(result.error || 'Gagal menambahkan user', 'error');
-        }
+        showCustomAlert('User berhasil ditambahkan!', 'success');
+        restoreUserManagement();
+        updateUserCache(formData.username, formData.password, formData);
+        
     } catch (error) {
         updateUserCache(formData.username, formData.password, {
             ...formData,
@@ -1311,44 +1278,21 @@ async function handleAddUser(e) {
     }
 }
 
-function addUserToServer(userData) {
-    return new Promise((resolve, reject) => {
-        const payload = {
-            type: 'USER_MANAGEMENT',
-            action: 'add',
-            adminUser: currentUser.username,
-            adminPass: 'admin123',
-            userData: userData
-        };
-        
-        fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        })
-        .then(() => resolve({ success: true }))
-        .catch(reject);
-    });
-}
-
 async function toggleUserStatus(username) {
     if (!confirm(`Yakin ingin mengubah status user @${username}?`)) return;
     
     try {
-        const payload = {
-            type: 'USER_MANAGEMENT',
-            action: 'toggle',
-            adminUser: currentUser.username,
-            adminPass: 'admin123',
-            targetUsername: username
-        };
-        
         await fetch(GAS_URL, {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                type: 'USER_MANAGEMENT',
+                action: 'toggle',
+                adminUser: currentUser.username,
+                adminPass: 'admin123',
+                targetUsername: username
+            })
         });
         
         showCustomAlert('Status user diubah', 'success');
@@ -1374,19 +1318,17 @@ async function deleteUser(username) {
     }
     
     try {
-        const payload = {
-            type: 'USER_MANAGEMENT',
-            action: 'delete',
-            adminUser: currentUser.username,
-            adminPass: 'admin123',
-            targetUsername: username
-        };
-        
         await fetch(GAS_URL, {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({
+                type: 'USER_MANAGEMENT',
+                action: 'delete',
+                adminUser: currentUser.username,
+                adminPass: 'admin123',
+                targetUsername: username
+            })
         });
         
         showCustomAlert('User berhasil dihapus', 'success');
@@ -1402,124 +1344,36 @@ async function deleteUser(username) {
     }
 }
 
-// ============================================
-// 8. SYNC & OFFLINE SUPPORT
-// ============================================
-
-/**
- * Sinkronisasi data users untuk mode offline
- * Hanya dijalankan untuk admin saat login online berhasil
- */
 async function syncUsersForOffline() {
-    // Validasi kondisi
     if (!navigator.onLine) {
-        console.log('Sync skipped: Device is offline');
+        console.log('[Sync] Skipped: Offline');
         return;
     }
     
-    if (!currentUser) {
-        console.log('Sync skipped: No authenticated user');
+    if (!currentUser || currentUser.role !== 'admin') {
+        console.log('[Sync] Skipped: Not admin');
         return;
     }
     
-    if (currentUser.role !== 'admin') {
-        console.log('Sync skipped: User is not admin');
-        return;
-    }
-    
-    console.log('[SYNC] Starting offline users sync for admin...');
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 detik timeout
+    console.log('[Sync] Starting...');
     
     try {
         const callbackName = 'syncUsersCallback_' + Date.now();
+        const url = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
         
-        const result = await new Promise((resolve, reject) => {
-            // Cleanup function
-            const cleanup = () => {
-                clearTimeout(timeoutId);
-                if (window[callbackName]) delete window[callbackName];
-            };
-            
-            // Setup callback
-            window[callbackName] = (response) => {
-                cleanup();
-                if (response && response.success && Array.isArray(response.users)) {
-                    resolve(response);
-                } else {
-                    reject(new Error(response?.error || 'Invalid response format'));
-                }
-            };
-            
-            // Create script tag
-            const script = document.createElement('script');
-            script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
-            
-            script.onerror = () => {
-                cleanup();
-                reject(new Error('Failed to load script'));
-            };
-            
-            // Abort handling
-            controller.signal.addEventListener('abort', () => {
-                cleanup();
-                reject(new Error('Sync aborted'));
-            });
-            
-            document.body.appendChild(script);
-            
-            // Auto cleanup script DOM after load
-            script.onload = () => {
-                setTimeout(() => {
-                    if (script.parentNode) script.remove();
-                }, 2000);
-            };
-        });
+        const result = await safeJSONP(url, callbackName, 8000);
         
-        // Update cache dengan data fresh dari server
-        if (result.users.length > 0) {
+        if (result.success && Array.isArray(result.users)) {
             updateUsersCache(result.users);
-            console.log(`[SYNC] Success: ${result.users.length} users cached for offline mode`);
-            
-            // Optional: Silent notification (bisa diaktifkan jika perlu)
-            // showCustomAlert(`✓ ${result.users.length} users synced`, 'success');
-        } else {
-            console.log('[SYNC] No users returned from server');
+            console.log(`[Sync] Success: ${result.users.length} users cached`);
         }
-        
     } catch (error) {
-        console.error('[SYNC] Failed:', error.message);
-        // Tidak perlu alert agar tidak ganggu UX, cache lama masih valid
-    } finally {
-        clearTimeout(timeoutId);
+        console.error('[Sync] Error:', error.message);
     }
-}
-
-/**
- * Helper untuk cleanup JSONP callback dan script tags
- */
-function cleanupJSONP(callbackName) {
-    // Hapus global callback
-    if (window[callbackName]) {
-        try {
-            delete window[callbackName];
-        } catch (e) {
-            window[callbackName] = undefined;
-        }
-    }
-    
-    // Hapus script tag yang terkait (best effort)
-    const scripts = document.querySelectorAll('script');
-    scripts.forEach(script => {
-        if (script.src && script.src.includes('callback=' + callbackName)) {
-            if (script.parentNode) script.remove();
-        }
-    });
 }
 
 // ============================================
-// 9. CHANGE PASSWORD FUNCTIONS
+// 8. CHANGE PASSWORD
 // ============================================
 
 function showChangePasswordModal() {
@@ -1535,7 +1389,6 @@ function showChangePasswordModal() {
     
     if (usernameSpan) usernameSpan.textContent = currentUser.username;
     
-    // Admin tidak perlu old password
     if (currentUser.role === 'admin') {
         if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
         const oldPassInput = document.getElementById('cpOldPassword');
@@ -1595,7 +1448,6 @@ function hideCPError() {
     }
 }
 
-// Ganti fungsi handleChangePasswordSubmit dengan ini:
 async function handleChangePasswordSubmit(e) {
     e.preventDefault();
     hideCPError();
@@ -1609,7 +1461,6 @@ async function handleChangePasswordSubmit(e) {
     const newPassword = document.getElementById('cpNewPassword')?.value || '';
     const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
     
-    // Validasi input...
     if (newPassword.length < 4) {
         showCPError('Password baru minimal 4 karakter');
         return;
@@ -1627,17 +1478,15 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        // Gunakan JSONP untuk bisa membaca response
-        const result = await changePasswordJSONP(
-            currentUser.username,
-            currentUser.role === 'admin' ? '' : oldPassword,
-            newPassword
+        const callbackName = 'cpCallback_' + Date.now();
+        const result = await safeJSONP(
+            `${GAS_URL}?action=changePassword&username=${encodeURIComponent(currentUser.username)}&oldPassword=${encodeURIComponent(currentUser.role === 'admin' ? '' : oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`,
+            callbackName,
+            10000
         );
         
         if (result.success) {
-            // Update cache lokal
             updatePasswordInCache(currentUser.username, newPassword);
-            
             showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
             closeChangePasswordModal();
             
@@ -1659,36 +1508,8 @@ async function handleChangePasswordSubmit(e) {
     }
 }
 
-// Pastikan fungsi JSONP ini ada (sudah ada di kode Anda tapi perlu dipastikan):
-function changePasswordJSONP(username, oldPassword, newPassword) {
-    return new Promise((resolve, reject) => {
-        const callbackName = 'cpCallback_' + Date.now();
-        const timeout = setTimeout(() => {
-            cleanupJSONP(callbackName);
-            reject(new Error('Timeout'));
-        }, 10000);
-        
-        window[callbackName] = (response) => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            resolve(response);
-        };
-        
-        const script = document.createElement('script');
-        script.src = `${GAS_URL}?action=changePassword&username=${encodeURIComponent(username)}&oldPassword=${encodeURIComponent(oldPassword)}&newPassword=${encodeURIComponent(newPassword)}&callback=${callbackName}`;
-        
-        script.onerror = () => {
-            clearTimeout(timeout);
-            cleanupJSONP(callbackName);
-            reject(new Error('Network error'));
-        };
-        
-        document.body.appendChild(script);
-    });
-}
-
 // ============================================
-// 10. UPLOAD PROGRESS MANAGER
+// 9. UPLOAD PROGRESS MANAGER
 // ============================================
 
 function showUploadProgress(title = 'Mengupload Data...') {
@@ -1822,18 +1643,17 @@ function hideUploadProgress() {
 }
 
 function cancelUpload() {
+    console.log('[Upload] User cancelled');
     if (currentUploadController) {
         currentUploadController.abort();
+        currentUploadController = null;
     }
     hideUploadProgress();
     showCustomAlert('Upload dibatalkan', 'warning');
 }
 
 // ============================================
-// 11. LOGSHEET FUNCTIONS (TURBINE)
-// ============================================
-// ============================================
-// 11.5 FUNGSI FOTO PARAMETER (BARU)
+// 10. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 
 function initParamCameraListener() {
@@ -1843,51 +1663,59 @@ function initParamCameraListener() {
     }
 }
 
-function handleTPMPhoto(event) {
+async function handleParamPhoto(event) {
     const file = event.target.files[0];
-    if (!file) return;
+    if (!file) {
+        proceedSaveAfterPhoto();
+        return;
+    }
     
     const originalSize = file.size;
     
-    // Cek ukuran asli (batas hard 10MB sebelum kompresi)
     if (originalSize > 10 * 1024 * 1024) {
         showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(originalSize)}). Maksimal 10MB sebelum kompresi.`, 'error');
         event.target.value = '';
         return;
     }
     
-    if (!file.type.startsWith('image/')) {
-        showCustomAlert('File harus berupa gambar.', 'error');
-        event.target.value = '';
-        return;
-    }
-    
     const reader = new FileReader();
     reader.onload = async function(e) {
+        const base64Photo = e.target.result;
+        
         try {
             showCustomAlert('📸 Mengkompresi foto...', 'info');
             
-            // Kompresi dengan kualitas sedikit lebih tinggi untuk TPM (dokumentasi penting)
-            const compressedPhoto = await compressImage(e.target.result, 1600, 0.85, 4.5);
+            const compressedPhoto = await compressImage(base64Photo, 1280, 0.8, 2.5);
             const compressedSize = getBase64Size(compressedPhoto);
             
-            currentTPMPhoto = compressedPhoto;
-            const preview = document.getElementById('tpmPhotoPreview');
-            const photoSection = document.getElementById('tpmPhotoSection');
+            const fullLabel = AREAS[activeArea][activeIdx];
             
-            if (preview) {
-                preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
-            }
-            if (photoSection) photoSection.classList.add('has-photo');
+            if (!currentInput[activeArea]) currentInput[activeArea] = {};
+            
+            currentInput[activeArea][fullLabel + '_photo'] = compressedPhoto;
+            currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
+            currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
+            
+            localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+            updatePhotoIndicator(true);
             
             const compressRatio = ((1 - (compressedSize / originalSize)) * 100).toFixed(0);
-            showCustomAlert(`📸 Foto berhasil! (Dikurangi ${compressRatio}%, ${formatFileSize(compressedSize)})`, 'success');
+            showCustomAlert(`📸 Foto berhasil disimpan! (Dikurangi ${compressRatio}%)`, 'success');
+            
+            setTimeout(() => {
+                proceedSaveAfterPhoto();
+            }, 500);
             
         } catch (error) {
-            console.error('TPM Compression error:', error);
-            showCustomAlert('Gagal mengkompresi foto TPM.', 'error');
+            console.error('Compression error:', error);
+            showCustomAlert('Gagal mengkompresi foto. Coba foto lain.', 'error');
         }
     };
+    
+    reader.onerror = function() {
+        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
+    };
+    
     reader.readAsDataURL(file);
 }
 
@@ -1935,27 +1763,23 @@ function updatePhotoIndicator(hasPhoto) {
     }
 }
 
-function fetchLastData() {
+async function fetchLastData() {
     updateStatusIndicator(false);
-    const timeout = setTimeout(() => renderMenu(), 8000);
-    const callbackName = 'jsonp_' + Date.now();
     
-    window[callbackName] = (data) => {
-        clearTimeout(timeout);
-        lastData = data;
+    try {
+        const callbackName = 'jsonp_' + Date.now();
+        const result = await Promise.race([
+            safeJSONP(`${GAS_URL}?callback=${callbackName}`, callbackName, 8000),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
+        ]);
+        
+        lastData = result;
         updateStatusIndicator(true);
-        cleanupJSONP(callbackName);
         renderMenu();
-    };
-    
-    const script = document.createElement('script');
-    script.src = `${GAS_URL}?callback=${callbackName}`;
-    script.onerror = () => {
-        clearTimeout(timeout);
-        cleanupJSONP(callbackName);
+    } catch (error) {
+        console.warn('Fetch last data failed:', error);
         renderMenu();
-    };
-    document.body.appendChild(script);
+    }
 }
 
 function updateStatusIndicator(isOnline) {
@@ -2070,8 +1894,6 @@ function renderProgressDots() {
         const isFilled = savedValue !== '';
         const hasIssue = ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         const isActive = i === activeIdx;
-        
-        // Cek apakah ada foto untuk parameter ini
         const hasPhoto = currentInput[activeArea]?.[fullLabel + '_photo'] ? true : false;
         
         let className = '';
@@ -2080,7 +1902,6 @@ function renderProgressDots() {
         else if (isFilled) className = 'filled';
         if (hasPhoto) className += ' has-photo';
         
-        // TAMBAHKAN title attribute untuk tooltip
         let title = '';
         if (hasIssue) title = firstLine;
         if (hasPhoto) title = title ? title + ' + 📸 Foto' : '📸 Ada foto bukti';
@@ -2381,34 +2202,27 @@ function saveCurrentStep() {
 }
 
 function saveStep() {
-    // 1. Simpan nilai input terlebih dahulu
     saveCurrentStep();
     
     const fullLabel = AREAS[activeArea][activeIdx];
-    
-    // 2. Cek apakah sudah ada foto untuk parameter ini
     const existingPhoto = currentInput[activeArea] && currentInput[activeArea][fullLabel + '_photo'];
     
     if (existingPhoto) {
-        // Jika sudah ada foto, langsung lanjut
         proceedSaveAfterPhoto();
     } else {
-        // 3. Minta konfirmasi untuk ambil foto bukti
         if (confirm('📸 Ambil foto lokasi sebagai bukti pengisian?\n\nFoto akan disimpan sebagai jejak bahwa Anda berada di lokasi ini.')) {
             const paramCamera = document.getElementById('paramCamera');
             if (paramCamera) {
                 paramCamera.click();
-                // Proses selanjutnya akan ditangani oleh handleParamPhoto
             } else {
                 proceedSaveAfterPhoto();
             }
         } else {
-            // User memilih tidak ambil foto, tetap lanjut
-            console.log('User menyimpan tanpa foto bukti');
             proceedSaveAfterPhoto();
         }
     }
 }
+
 function goBack() {
     saveCurrentStep();
     
@@ -2423,22 +2237,24 @@ function goBack() {
 async function sendToSheet() {
     if (!requireAuth()) return;
     
-    // Cek apakah ada data foto yang perlu dikirim
     const progress = showUploadProgress('Mengirim Logsheet & Foto...');
     currentUploadController = new AbortController();
     
-    // Persiapkan data dengan foto
+    const autoAbortTimeout = setTimeout(() => {
+        if (currentUploadController) {
+            currentUploadController.abort();
+        }
+    }, 30000);
+    
     let allParameters = {};
     let photoCount = 0;
     
     Object.entries(currentInput).forEach(([areaName, params]) => {
         Object.entries(params).forEach(([paramName, value]) => {
-            // Khusus untuk foto, kita kirim sebagai base64 dengan metadata
             if (paramName.endsWith('_photo')) {
                 allParameters[paramName] = value;
                 photoCount++;
             } else if (!paramName.endsWith('_photoTime') && !paramName.endsWith('_photoOperator')) {
-                // Data normal (bukan metadata foto)
                 allParameters[paramName] = value;
             }
         });
@@ -2453,31 +2269,36 @@ async function sendToSheet() {
         ...allParameters
     };
     
-    console.log(`Sending Logsheet Data dengan ${photoCount} foto...`);
+    console.log(`[SendToSheet] Sending ${photoCount} photos...`);
     
     try {
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(finalData),
-            signal: currentUploadController.signal
-        });
+        await Promise.race([
+            fetch(GAS_URL, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(finalData),
+                signal: currentUploadController.signal
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Upload timeout')), 25000))
+        ]);
         
+        clearTimeout(autoAbortTimeout);
         progress.complete();
-        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto bukti)`, 'success');
         
-        // Clear draft
+        showCustomAlert(`✓ Data berhasil dikirim! (${photoCount} foto)`, 'success');
+        
         currentInput = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
         
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
-        console.error('Error sending data:', error);
+        clearTimeout(autoAbortTimeout);
+        console.error('[SendToSheet] Error:', error);
+        
         progress.error();
         
-        // Simpan ke offline storage
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
         offlineData.push(finalData);
         localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
@@ -2485,11 +2306,13 @@ async function sendToSheet() {
         setTimeout(() => {
             showCustomAlert('Gagal mengirim. Data & foto disimpan lokal.', 'error');
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
 // ============================================
-// 12. TPM FUNCTIONS
+// 11. TPM FUNCTIONS
 // ============================================
 
 function updateTPMUserInfo() {
@@ -2549,12 +2372,14 @@ function resetTPMStatusButtons() {
     });
 }
 
-function handleTPMPhoto(event) {
+async function handleTPMPhoto(event) {
     const file = event.target.files[0];
     if (!file) return;
     
-    if (file.size > 5 * 1024 * 1024) {
-        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
+    const originalSize = file.size;
+    
+    if (originalSize > 10 * 1024 * 1024) {
+        showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(originalSize)}). Maksimal 10MB sebelum kompresi.`, 'error');
         event.target.value = '';
         return;
     }
@@ -2566,16 +2391,29 @@ function handleTPMPhoto(event) {
     }
     
     const reader = new FileReader();
-    reader.onload = function(e) {
-        currentTPMPhoto = e.target.result;
-        const preview = document.getElementById('tpmPhotoPreview');
-        const photoSection = document.getElementById('tpmPhotoSection');
-        
-        if (preview) {
-            preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
+    reader.onload = async function(e) {
+        try {
+            showCustomAlert('📸 Mengkompresi foto...', 'info');
+            
+            const compressedPhoto = await compressImage(e.target.result, 1600, 0.85, 4.5);
+            const compressedSize = getBase64Size(compressedPhoto);
+            
+            currentTPMPhoto = compressedPhoto;
+            const preview = document.getElementById('tpmPhotoPreview');
+            const photoSection = document.getElementById('tpmPhotoSection');
+            
+            if (preview) {
+                preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
+            }
+            if (photoSection) photoSection.classList.add('has-photo');
+            
+            const compressRatio = ((1 - (compressedSize / originalSize)) * 100).toFixed(0);
+            showCustomAlert(`📸 Foto berhasil! (Dikurangi ${compressRatio}%)`, 'success');
+            
+        } catch (error) {
+            console.error('TPM Compression error:', error);
+            showCustomAlert('Gagal mengkompresi foto TPM.', 'error');
         }
-        if (photoSection) photoSection.classList.add('has-photo');
-        showCustomAlert('Foto berhasil diambil!', 'success');
     };
     reader.readAsDataURL(file);
 }
@@ -2624,11 +2462,12 @@ async function submitTPMData() {
         return;
     }
     
-    const progress = showUploadProgress('Mengupload TPM & Foto...');
-    progress.updateText('Mengompresi foto...');
+    const progress = showUploadProgress('Mengupload TPM...');
+    currentUploadController = new AbortController();
     
-    await new Promise(resolve => setTimeout(resolve, 800));
-    progress.updateText('Mengirim data...');
+    const autoAbort = setTimeout(() => {
+        currentUploadController?.abort();
+    }, 20000);
     
     const tpmData = {
         type: 'TPM',
@@ -2642,40 +2481,47 @@ async function submitTPMData() {
     };
     
     try {
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(tpmData)
-        });
+        await Promise.race([
+            fetch(GAS_URL, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(tpmData),
+                signal: currentUploadController.signal
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('TPM Upload timeout')), 20000))
+        ]);
         
+        clearTimeout(autoAbort);
         progress.complete();
         
         let tpmHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_HISTORY) || '[]');
         tpmHistory.push({...tpmData, photo: '[UPLOADED]'});
         localStorage.setItem(DRAFT_KEYS.TPM_HISTORY, JSON.stringify(tpmHistory));
         
-        showCustomAlert(`✓ Data TPM ${activeTPMArea} berhasil disimpan!`, 'success');
+        showCustomAlert(`✓ Data TPM berhasil disimpan!`, 'success');
         currentTPMPhoto = null;
         currentTPMStatus = '';
         
         setTimeout(() => navigateTo('tpmScreen'), 1500);
         
     } catch (error) {
+        clearTimeout(autoAbort);
+        console.error('[TPM] Error:', error);
         progress.error();
         
         let offlineTPM = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_OFFLINE) || '[]');
         offlineTPM.push(tpmData);
         localStorage.setItem(DRAFT_KEYS.TPM_OFFLINE, JSON.stringify(offlineTPM));
         
-        setTimeout(() => {
-            showCustomAlert('Gagal mengupload. Data disimpan lokal.', 'error');
-        }, 500);
+        showCustomAlert('Gagal upload. Data disimpan lokal.', 'error');
+    } finally {
+        currentUploadController = null;
     }
 }
 
 // ============================================
-// 13. BALANCING FUNCTIONS
+// 12. BALANCING FUNCTIONS
 // ============================================
 
 function initBalancingScreen() {
@@ -2868,14 +2714,10 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
         
         if (fromSpreadsheet && navigator.onLine) {
             try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000);
-                
                 const response = await fetch(`${GAS_URL}?action=getLastBalancing&t=${Date.now()}`, {
-                    signal: controller.signal
+                    signal: AbortSignal.timeout(10000)
                 });
                 
-                clearTimeout(timeoutId);
                 const result = await response.json();
                 
                 if (result.success && result.data) {
@@ -3242,6 +3084,10 @@ async function submitBalancingData() {
     const progress = showUploadProgress('Mengirim Data Balancing...');
     currentUploadController = new AbortController();
     
+    const autoAbort = setTimeout(() => {
+        currentUploadController?.abort();
+    }, 30000);
+    
     const eksporValue = getEksporImporValue();
     const lpBalance = calculateLPBalance();
     
@@ -3305,20 +3151,19 @@ async function submitBalancingData() {
     };
     
     try {
-        progress.updateText('Menghitung ulang balance...');
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await Promise.race([
+            fetch(GAS_URL, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(balancingData),
+                signal: currentUploadController.signal
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Balancing timeout')), 30000))
+        ]);
         
-        progress.updateText('Mengirim ke server...');
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(balancingData),
-            signal: currentUploadController.signal
-        });
-        
+        clearTimeout(autoAbort);
         progress.complete();
-        showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
         
         let balancingHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.BALANCING_HISTORY) || '[]');
         balancingHistory.push({
@@ -3326,6 +3171,8 @@ async function submitBalancingData() {
             submittedAt: new Date().toISOString()
         });
         localStorage.setItem(DRAFT_KEYS.BALANCING_HISTORY, JSON.stringify(balancingHistory));
+        
+        showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
         
         setTimeout(() => {
             const waMessage = encodeURIComponent(formatWhatsAppMessage(balancingData));
@@ -3335,6 +3182,7 @@ async function submitBalancingData() {
         }, 1000);
         
     } catch (error) {
+        clearTimeout(autoAbort);
         console.error('Balancing Error:', error);
         progress.error();
         
@@ -3345,6 +3193,8 @@ async function submitBalancingData() {
         setTimeout(() => {
             showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
@@ -3357,30 +3207,26 @@ function toggleSS2000Detail() {
 }
 
 // ============================================
-// 14. CT LOGSHEET FUNCTIONS
+// 13. CT LOGSHEET FUNCTIONS
 // ============================================
 
-function fetchLastDataCT() {
+async function fetchLastDataCT() {
     updateStatusIndicator(false);
-    const timeout = setTimeout(() => renderCTMenu(), 8000);
-    const callbackName = 'jsonp_ct_' + Date.now();
     
-    window[callbackName] = (data) => {
-        clearTimeout(timeout);
-        lastDataCT = data;
+    try {
+        const callbackName = 'jsonp_ct_' + Date.now();
+        const result = await Promise.race([
+            safeJSONP(`${GAS_URL}?action=getLastCT&callback=${callbackName}`, callbackName, 8000),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
+        ]);
+        
+        lastDataCT = result || {};
         updateStatusIndicator(true);
-        cleanupJSONP(callbackName);
         renderCTMenu();
-    };
-    
-    const script = document.createElement('script');
-    script.src = `${GAS_URL}?action=getLastCT&callback=${callbackName}`;
-    script.onerror = () => {
-        clearTimeout(timeout);
-        cleanupJSONP(callbackName);
+    } catch (error) {
+        console.warn('Fetch CT last data failed:', error);
         renderCTMenu();
-    };
-    document.body.appendChild(script);
+    }
 }
 
 function renderCTMenu() {
@@ -3871,6 +3717,10 @@ async function sendCTToSheet() {
     const progress = showUploadProgress('Mengirim Logsheet CT...');
     currentUploadController = new AbortController();
     
+    const autoAbort = setTimeout(() => {
+        currentUploadController?.abort();
+    }, 25000);
+    
     let allParameters = {};
     Object.entries(currentInputCT).forEach(([areaName, params]) => {
         Object.entries(params).forEach(([paramName, value]) => {
@@ -3885,18 +3735,23 @@ async function sendCTToSheet() {
         ...allParameters
     };
     
-    console.log('Sending CT Logsheet Data:', finalData);
+    console.log('Sending CT Logsheet Data...');
     
     try {
-        await fetch(GAS_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(finalData),
-            signal: currentUploadController.signal
-        });
+        await Promise.race([
+            fetch(GAS_URL, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(finalData),
+                signal: currentUploadController.signal
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('CT Upload timeout')), 25000))
+        ]);
         
+        clearTimeout(autoAbort);
         progress.complete();
+        
         showCustomAlert('✓ Data CT berhasil dikirim ke sistem!', 'success');
         
         currentInputCT = {};
@@ -3905,6 +3760,7 @@ async function sendCTToSheet() {
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
+        clearTimeout(autoAbort);
         console.error('Error sending CT data:', error);
         progress.error();
         
@@ -3915,11 +3771,13 @@ async function sendCTToSheet() {
         setTimeout(() => {
             showCustomAlert('Gagal mengirim. Data disimpan lokal.', 'error');
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
 // ============================================
-// 15. UI & EVENT LISTENERS
+// 14. UI & EVENT LISTENERS
 // ============================================
 
 function setupLoginListeners() {
@@ -3988,7 +3846,7 @@ function loadUserStats() {
 }
 
 // ============================================
-// 16. PWA INSTALL HANDLER
+// 15. PWA INSTALL HANDLER
 // ============================================
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -4133,8 +3991,11 @@ function showToast(msg, type) {
 }
 
 // ============================================
-// 17. KEYBOARD SHORTCUTS
+// 16. KEYBOARD SHORTCUTS & EMERGENCY RESET
 // ============================================
+
+let escPressCount = 0;
+let escResetTimer = null;
 
 document.addEventListener('keydown', (e) => {
     const paramScreen = document.getElementById('paramScreen');
@@ -4157,10 +4018,27 @@ document.addEventListener('keydown', (e) => {
             goBackCT();
         }
     }
+    
+    // Emergency reset dengan triple-tap ESC
+    if (e.key === 'Escape') {
+        escPressCount++;
+        
+        if (escPressCount === 1) {
+            escResetTimer = setTimeout(() => {
+                escPressCount = 0;
+            }, 2000);
+        }
+        
+        if (escPressCount >= 3) {
+            clearTimeout(escResetTimer);
+            escPressCount = 0;
+            emergencyResetUpload();
+        }
+    }
 });
 
 // ============================================
-// 18. DOM READY INITIALIZATION
+// 17. DOM READY INITIALIZATION
 // ============================================
 
 window.addEventListener('DOMContentLoaded', () => {
