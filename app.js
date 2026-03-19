@@ -1752,51 +1752,16 @@ function cancelUpload() {
 // 11. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 // ============================================
-// FUNGSI KOMPRESI GAMBAR & FOTO PARAMETER (UPDATE)
+// 11.5 FUNGSI FOTO PARAMETER (BARU)
 // ============================================
 
-function compressImage(base64Image, maxWidth = 1280, quality = 0.7) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = function() {
-            let width = img.width;
-            let height = img.height;
-            
-            if (width > maxWidth) {
-                height = Math.round((height * maxWidth) / width);
-                width = maxWidth;
-            }
-            
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            
-            const ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.drawImage(img, 0, 0, width, height);
-            
-            const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-            resolve(compressedBase64);
-        };
-        
-        img.onerror = function() {
-            reject(new Error('Gagal kompresi'));
-        };
-        
-        img.src = base64Image;
-    });
+function initParamCameraListener() {
+    const paramCamera = document.getElementById('paramCamera');
+    if (paramCamera) {
+        paramCamera.addEventListener('change', handleParamPhoto);
+    }
 }
 
-function getBase64SizeInMB(base64String) {
-    const base64Length = base64String.length - (base64String.indexOf(',') + 1);
-    const padding = (base64String.charAt(base64String.length - 2) === '=') ? 2 : 
-                    (base64String.charAt(base64String.length - 1) === '=') ? 1 : 0;
-    const fileSizeBytes = (base64Length * 0.75) - padding;
-    return fileSizeBytes / (1024 * 1024);
-}
-
-// GANTI FUNGSI INI (versi dengan kompresi)
 function handleParamPhoto(event) {
     const file = event.target.files[0];
     if (!file) {
@@ -1804,75 +1769,35 @@ function handleParamPhoto(event) {
         return;
     }
     
-    // Tampilkan loading
-    showCustomAlert('📸 Mengompres foto...', 'info');
+    if (file.size > 3 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 3MB.', 'error');
+        event.target.value = '';
+        return;
+    }
     
     const reader = new FileReader();
-    
-    reader.onload = async function(e) {
-        try {
-            let base64Photo = e.target.result;
-            const fullLabel = AREAS[activeArea][activeIdx];
-            
-            const sizeBefore = getBase64SizeInMB(base64Photo);
-            console.log(`Original: ${sizeBefore.toFixed(2)} MB`);
-            
-            // Kompresi jika > 1MB
-            if (sizeBefore > 1.0) {
-                let quality = 0.7;
-                let maxWidth = 1280;
-                
-                if (sizeBefore > 5) {
-                    quality = 0.5;
-                    maxWidth = 1024;
-                } else if (sizeBefore > 3) {
-                    quality = 0.6;
-                    maxWidth = 1152;
-                }
-                
-                base64Photo = await compressImage(base64Photo, maxWidth, quality);
-                
-                // Jika masih besar, kompres lagi
-                const sizeAfter = getBase64SizeInMB(base64Photo);
-                if (sizeAfter > 2.5) {
-                    base64Photo = await compressImage(base64Photo, 800, 0.5);
-                }
-            }
-            
-            const finalSize = getBase64SizeInMB(base64Photo);
-            
-            // Cek final size
-            if (finalSize > 3) {
-                closeAlert();
-                showCustomAlert('❌ Foto masih terlalu besar (' + finalSize.toFixed(2) + ' MB). Coba ambil dengan cahaya lebih terang.', 'error');
-                event.target.value = '';
-                return;
-            }
-            
-            // Simpan
-            if (!currentInput[activeArea]) currentInput[activeArea] = {};
-            currentInput[activeArea][fullLabel + '_photo'] = base64Photo;
-            currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
-            currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
-            
-            localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-            
-            closeAlert();
-            updatePhotoIndicator(true);
-            showCustomAlert(`✅ Foto OK! (${finalSize.toFixed(1)} MB)`, 'success');
-            
-            setTimeout(() => proceedSaveAfterPhoto(), 600);
-            
-        } catch (error) {
-            closeAlert();
-            showCustomAlert('❌ Gagal proses foto', 'error');
-            event.target.value = '';
-        }
+    reader.onload = function(e) {
+        const base64Photo = e.target.result;
+        const fullLabel = AREAS[activeArea][activeIdx];
+        
+        if (!currentInput[activeArea]) currentInput[activeArea] = {};
+        
+        currentInput[activeArea][fullLabel + '_photo'] = base64Photo;
+        currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
+        currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
+        
+        localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
+        updatePhotoIndicator(true);
+        
+        showCustomAlert('📸 Foto bukti berhasil disimpan!', 'success');
+        
+        setTimeout(() => {
+            proceedSaveAfterPhoto();
+        }, 500);
     };
     
     reader.onerror = function() {
-        closeAlert();
-        showCustomAlert('❌ Gagal baca file', 'error');
+        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
     };
     
     reader.readAsDataURL(file);
