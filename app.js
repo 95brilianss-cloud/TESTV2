@@ -2,7 +2,7 @@
 // TURBINE LOGSHEET PRO - FULL APPLICATION
 // Version: 1.4.2 (With CT Logsheet Feature)
 // ============================================
-const APP_VERSION = '1.4.6';
+const APP_VERSION = '1.4.7';
 
 // ============================================
 // CONFIGURATION & CONSTANTS
@@ -323,29 +323,13 @@ async function loginOperator() {
     const errorMsg = document.getElementById('loginError');
     const loginBtn = document.querySelector('#loginScreen .btn-primary');
     
-    if (!usernameInput || !passwordInput) {
-        console.error('Login inputs not found');
-        return;
-    }
+    if (!usernameInput || !passwordInput) return;
     
-    const username = usernameInput.value.trim().toLowerCase();
-    const password = passwordInput.value.trim();
+    const username = String(usernameInput.value).trim().toLowerCase();
+    const password = String(passwordInput.value).trim();
     
-    if (!username) {
-        showLoginError('Username wajib diisi!');
-        usernameInput.focus();
-        return;
-    }
-    
-    if (!password) {
-        showLoginError('Password wajib diisi!');
-        passwordInput.focus();
-        return;
-    }
-    
-    if (username.length < 3) {
-        showLoginError('Username minimal 3 karakter!');
-        usernameInput.focus();
+    if (!username || !password) {
+        showLoginError('Username dan password wajib diisi!');
         return;
     }
     
@@ -356,25 +340,39 @@ async function loginOperator() {
     
     hideLoginError();
     
-    try {
-        const result = await validateUserOnline(username, password);
-        
-        if (result.success) {
-            handleLoginSuccess(result.user, username, password);
-        } else {
-            const offlineResult = validateUserOffline(username, password);
+    let onlineSuccess = false;
+    
+    // Coba login online dulu
+    if (navigator.onLine) {
+        try {
+            const result = await validateUserOnline(username, password);
             
-            if (offlineResult.success) {
-                handleLoginSuccess(offlineResult.user, username, password, true);
-                showCustomAlert('Login offline berhasil! (Mode Local)', 'warning');
-            } else {
-                showLoginError(result.error || offlineResult.error || 'Login gagal');
-                if (loginBtn) {
-                    loginBtn.disabled = false;
-                    loginBtn.innerHTML = '<span>🔓 Masuk</span>';
-                }
+            if (result.success) {
+                onlineSuccess = true;
+                // Simpan ke cache untuk offline
+                updateUserCache(username, password, result.user);
+                handleLoginSuccess(result.user, username, password, false);
+                return;
             }
+        } catch (error) {
+            console.log('Online login failed, trying offline...', error);
         }
+    }
+    
+    // Jika online gagal atau offline, coba dari cache/legacy
+    const offlineResult = validateUserOffline(username, password);
+    
+    if (offlineResult.success) {
+        handleLoginSuccess(offlineResult.user, username, password, true);
+        showCustomAlert('Login offline berhasil! (Mode Local)', navigator.onLine ? 'warning' : 'info');
+    } else {
+        showLoginError(offlineResult.error || 'Login gagal. Periksa koneksi atau username/password.');
+        if (loginBtn) {
+            loginBtn.disabled = false;
+            loginBtn.innerHTML = '<span>🔓 Masuk</span>';
+        }
+    }
+}
     } catch (error) {
         console.error('Login error:', error);
         
@@ -504,18 +502,25 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
 }
 
 function updateUserCache(username, password, userData) {
-    let cache = loadUsersCache() || {};
-    cache[username.toLowerCase()] = {
-        username: userData.username || username,
-        password: password,
-        role: userData.role,
-        name: userData.name,
-        department: userData.department,
-        status: 'ACTIVE',
-        lastSync: new Date().toISOString()
-    };
-    localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
-    usersCache = cache;
+    try {
+        let cache = loadUsersCache() || {};
+        
+        cache[username.toLowerCase()] = {
+            username: userData.username || username,
+            password: password, // Simpan plaintext untuk offline login
+            role: userData.role || 'operator',
+            name: userData.name || username,
+            department: userData.department || 'Unit Utilitas 3B',
+            status: 'ACTIVE',
+            lastSync: new Date().toISOString()
+        };
+        
+        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
+        usersCache = cache;
+        console.log('User cached for offline:', username);
+    } catch (e) {
+        console.error('Error saving cache:', e);
+    }
 }
 
 function loadUsersCache() {
@@ -921,24 +926,28 @@ function renderUserList(users) {
     container.innerHTML = html;
 }
 function updateUsersCache(usersArray) {
-    let cache = {};
-    usersArray.forEach(user => {
-        if (user && user.username && typeof user.username === 'string') {
-            cache[user.username.toLowerCase()] = {
-                username: user.username,
-                password: user.password || '',
-                role: user.role || 'operator',
-                name: user.name || user.username,
-                department: user.department || 'Unit Utilitas 3B',
-                status: user.status || 'ACTIVE',
-                lastSync: new Date().toISOString()
-            };
-        } else {
-            console.warn('Skipping invalid user in cache:', user);
-        }
-    });
-    localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
-    usersCache = cache;
+    try {
+        let cache = loadUsersCache() || {};
+        
+        usersArray.forEach(user => {
+            if (user && user.username) {
+                cache[user.username.toLowerCase()] = {
+                    username: user.username,
+                    password: user.password || '', // Pastikan password tersimpan
+                    role: user.role || 'operator',
+                    name: user.name || user.username,
+                    department: user.department || 'Unit Utilitas 3B',
+                    status: user.status || 'ACTIVE',
+                    lastSync: new Date().toISOString()
+                };
+            }
+        });
+        
+        localStorage.setItem(AUTH_CONFIG.USERS_CACHE_KEY, JSON.stringify(cache));
+        usersCache = cache;
+    } catch (e) {
+        console.error('Error updating users cache:', e);
+    }
 }
 
 function showAddUserForm() {
@@ -3987,5 +3996,47 @@ function togglePasswordVisibility() {
             // Eye on icon
             eyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
         }
+    }
+}
+
+async function syncUsersForOffline() {
+    if (!navigator.onLine || !currentUser || currentUser.role !== 'admin') return;
+    
+    try {
+        const callbackName = 'syncCallback_' + Date.now();
+        const result = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+            
+            window[callbackName] = (response) => {
+                clearTimeout(timeout);
+                delete window[callbackName];
+                resolve(response);
+            };
+            
+            const script = document.createElement('script');
+            script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
+            script.onerror = () => {
+                clearTimeout(timeout);
+                reject(new Error('Network error'));
+            };
+            document.body.appendChild(script);
+        });
+        
+        if (result.success && result.users) {
+            updateUsersCache(result.users);
+            console.log('Users synced for offline:', result.users.length);
+        }
+    } catch (e) {
+        console.error('Sync failed:', e);
+    }
+}
+
+// Panggil saat login berhasil
+function handleLoginSuccess(userData, username, password, isOffline = false) {
+    // ... kode existing ...
+    
+    // Jika login online, sync users untuk offline
+    if (!isOffline && userData.role === 'admin') {
+        setTimeout(syncUsersForOffline, 2000);
     }
 }
