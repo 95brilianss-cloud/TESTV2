@@ -2,7 +2,7 @@
 // TURBINE LOGSHEET PRO - FULL APPLICATION
 // Version: 1.4.2 (With CT Logsheet Feature)
 // ============================================
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.4.6';
 
 // ============================================
 // CONFIGURATION & CONSTANTS
@@ -3853,6 +3853,12 @@ async function handleChangePasswordSubmit(e) {
     e.preventDefault();
     hideCPError();
     
+    // Validasi currentUser
+    if (!currentUser || !currentUser.username) {
+        showCPError('Session tidak valid. Silakan login ulang.');
+        return;
+    }
+    
     const oldPassword = document.getElementById('cpOldPassword')?.value || '';
     const newPassword = document.getElementById('cpNewPassword')?.value || '';
     const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
@@ -3894,7 +3900,10 @@ async function handleChangePasswordSubmit(e) {
             body: JSON.stringify(payload)
         });
         
-        updatePasswordInCache(currentUser.username, newPassword);
+        // Update cache dengan pengecekan
+        if (currentUser && currentUser.username) {
+            updatePasswordInCache(currentUser.username, newPassword);
+        }
         
         showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
         closeChangePasswordModal();
@@ -3915,8 +3924,11 @@ async function handleChangePasswordSubmit(e) {
 }
 
 function updatePasswordInCache(username, newPassword) {
+    if (!username) return; // Cek null/undefined
+    
     const cache = loadUsersCache() || {};
-    const key = username.toLowerCase();
+    const key = String(username).toLowerCase(); // Konversi ke string
+    
     if (cache[key]) {
         cache[key].password = newPassword;
         cache[key].lastSync = new Date().toISOString();
