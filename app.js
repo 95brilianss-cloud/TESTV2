@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -325,6 +325,87 @@ if ('serviceWorker' in navigator) {
 // ============================================
 // 5. UTILITY FUNCTIONS
 // ============================================
+// ============================================
+// KOMPRESI GAMBAR OTOMATIS
+// ============================================
+
+/**
+ * Mengkompres gambar base64 dengan canvas
+ * @param {string} base64Image - Data URL gambar
+ * @param {number} maxWidth - Lebar maksimum (default: 1280)
+ * @param {number} quality - Kualitas JPEG (0-1, default: 0.8)
+ * @param {number} maxSizeMB - Ukuran maksimum dalam MB
+ * @returns {Promise<string>} Base64 terkompresi
+ */
+async function compressImage(base64Image, maxWidth = 1280, quality = 0.8, maxSizeMB = 2.5) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.src = base64Image;
+        
+        img.onload = function() {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+            
+            // Hitung ratio jika lebih besar dari maxWidth
+            if (width > maxWidth) {
+                height = Math.round(height * (maxWidth / width));
+                width = maxWidth;
+            }
+            
+            // Setup canvas
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            
+            // Background putih untuk transparansi
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Gambar
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Kompresi dengan penyesuaian kualitas
+            let compressed = canvas.toDataURL('image/jpeg', quality);
+            let currentQuality = quality;
+            const maxBytes = maxSizeMB * 1024 * 1024;
+            
+            // Iterasi kompresi jika masih terlalu besar
+            let attempts = 0;
+            while (getBase64Size(compressed) > maxBytes && attempts < 5 && currentQuality > 0.3) {
+                currentQuality -= 0.1;
+                compressed = canvas.toDataURL('image/jpeg', currentQuality);
+                attempts++;
+            }
+            
+            resolve(compressed);
+        };
+        
+        img.onerror = function() {
+            reject(new Error('Gagal memuat gambar'));
+        };
+    });
+}
+
+/**
+ * Mendapatkan ukuran file base64 dalam bytes
+ */
+function getBase64Size(base64String) {
+    const base64Length = base64String.split(',')[1].length;
+    const padding = (base64String.endsWith('==')) ? 2 : (base64String.endsWith('=')) ? 1 : 0;
+    return (base64Length * 0.75) - padding;
+}
+
+/**
+ * Format ukuran file ke string readable
+ */
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 function showUpdateAlert() {
     const updateAlert = document.getElementById('updateAlert');
@@ -1762,44 +1843,51 @@ function initParamCameraListener() {
     }
 }
 
-function handleParamPhoto(event) {
+function handleTPMPhoto(event) {
     const file = event.target.files[0];
-    if (!file) {
-        proceedSaveAfterPhoto();
+    if (!file) return;
+    
+    const originalSize = file.size;
+    
+    // Cek ukuran asli (batas hard 10MB sebelum kompresi)
+    if (originalSize > 10 * 1024 * 1024) {
+        showCustomAlert(`Ukuran foto terlalu besar (${formatFileSize(originalSize)}). Maksimal 10MB sebelum kompresi.`, 'error');
+        event.target.value = '';
         return;
     }
     
-    if (file.size > 3 * 1024 * 1024) {
-        showCustomAlert('Ukuran foto terlalu besar. Maksimal 3MB.', 'error');
+    if (!file.type.startsWith('image/')) {
+        showCustomAlert('File harus berupa gambar.', 'error');
         event.target.value = '';
         return;
     }
     
     const reader = new FileReader();
-    reader.onload = function(e) {
-        const base64Photo = e.target.result;
-        const fullLabel = AREAS[activeArea][activeIdx];
-        
-        if (!currentInput[activeArea]) currentInput[activeArea] = {};
-        
-        currentInput[activeArea][fullLabel + '_photo'] = base64Photo;
-        currentInput[activeArea][fullLabel + '_photoTime'] = new Date().toISOString();
-        currentInput[activeArea][fullLabel + '_photoOperator'] = currentUser ? currentUser.name : 'Unknown';
-        
-        localStorage.setItem(DRAFT_KEYS.LOGSHEET, JSON.stringify(currentInput));
-        updatePhotoIndicator(true);
-        
-        showCustomAlert('📸 Foto bukti berhasil disimpan!', 'success');
-        
-        setTimeout(() => {
-            proceedSaveAfterPhoto();
-        }, 500);
+    reader.onload = async function(e) {
+        try {
+            showCustomAlert('📸 Mengkompresi foto...', 'info');
+            
+            // Kompresi dengan kualitas sedikit lebih tinggi untuk TPM (dokumentasi penting)
+            const compressedPhoto = await compressImage(e.target.result, 1600, 0.85, 4.5);
+            const compressedSize = getBase64Size(compressedPhoto);
+            
+            currentTPMPhoto = compressedPhoto;
+            const preview = document.getElementById('tpmPhotoPreview');
+            const photoSection = document.getElementById('tpmPhotoSection');
+            
+            if (preview) {
+                preview.innerHTML = `<img src="${currentTPMPhoto}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="TPM Photo">`;
+            }
+            if (photoSection) photoSection.classList.add('has-photo');
+            
+            const compressRatio = ((1 - (compressedSize / originalSize)) * 100).toFixed(0);
+            showCustomAlert(`📸 Foto berhasil! (Dikurangi ${compressRatio}%, ${formatFileSize(compressedSize)})`, 'success');
+            
+        } catch (error) {
+            console.error('TPM Compression error:', error);
+            showCustomAlert('Gagal mengkompresi foto TPM.', 'error');
+        }
     };
-    
-    reader.onerror = function() {
-        showCustomAlert('Gagal membaca foto. Silakan coba lagi.', 'error');
-    };
-    
     reader.readAsDataURL(file);
 }
 
