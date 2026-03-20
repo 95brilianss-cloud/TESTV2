@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.5.5';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -35,7 +35,7 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyERSegTsOksliKzd8mxu7atXH9N6b_wu_OyKMtVMMdD9k-wR3Pqs48NCamx463Azx_/exec";
 
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
