@@ -1,12 +1,13 @@
 // ============================================
 // TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.5.0 (With Photo Validation Feature)
+// Version: 1.5.6 (FIXED - Compression & CORS)
+// PT Petrokimia Gresik Unit III B
 // ============================================
 
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.6';
+const APP_VERSION = '1.5.7';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -35,7 +36,7 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyERSegTsOksliKzd8mxu7atXH9N6b_wu_OyKMtVMMdD9k-wR3Pqs48NCamx463Azx_/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxiHILd473T21NZ8QLsN7lHMEeGPkrypiWrde_o2S2aHR576H1JqtdUjQgkNt8HYeMG/exec";
 
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
@@ -445,7 +446,7 @@ function isAdmin() {
 }
 
 // ============================================
-// PHOTO UPLOAD FUNCTION - BARU & DIPERBAIKI
+// PHOTO UPLOAD FUNCTION
 // ============================================
 
 /**
@@ -1814,65 +1815,157 @@ function cancelUpload() {
 }
 
 // ============================================
-// 11. PHOTO VALIDATION FUNCTIONS (DIPERBAIKI)
+// 11. PHOTO VALIDATION FUNCTIONS (FIXED)
 // ============================================
 
-// Turbine Photo Functions - DENGAN ERROR HANDLING LENGKAP
+// [NEW] Fungsi kompresi foto
+function compressImage(file, maxWidth = 1200, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        
+        reader.onload = function(e) {
+            const img = new Image();
+            
+            img.onload = function() {
+                let width = img.width;
+                let height = img.height;
+                
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width);
+                    width = maxWidth;
+                }
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                const compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                
+                console.log(`📸 Compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedBase64.length / 1024 / 1024).toFixed(2)}MB`);
+                
+                resolve(compressedBase64);
+            };
+            
+            img.onerror = () => reject(new Error('Failed to load image'));
+            img.src = e.target.result;
+        };
+        
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// [FIXED] Turbine Photo Handler dengan kompresi
 function handleTurbinePhoto(event) {
     const file = event.target.files[0];
     
-    console.log('📸 Turbine photo selected:', file);
+    console.log('📸 Turbine photo selected:', file?.name, 'Size:', (file?.size / 1024 / 1024).toFixed(2) + 'MB');
     
     if (!file) {
         console.warn('No file selected');
         return;
     }
     
-    // Validasi ukuran file (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
+    // [FIXED] Naikkan limit ke 10MB karena akan dikompres
+    if (file.size > 10 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 10MB.', 'error');
         event.target.value = '';
         return;
     }
     
-    // Validasi tipe file
     if (!file.type.startsWith('image/')) {
         showCustomAlert('File harus berupa gambar.', 'error');
         event.target.value = '';
         return;
     }
-    
-    const reader = new FileReader();
-    
-    reader.onerror = function(error) {
-        console.error('❌ FileReader error:', error);
-        showCustomAlert('Gagal membaca foto. Coba lagi.', 'error');
-    };
-    
-    reader.onload = function(e) {
-        try {
-            console.log('✅ File loaded successfully, size:', e.target.result.length);
+
+    // Show loading
+    const preview = document.getElementById('turbinePhotoPreview');
+    if (preview) {
+        preview.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #64748b; font-size: 0.875rem;">⏳ Memproses foto...</div>';
+    }
+
+    // [FIXED] Kompresi sebelum menyimpan
+    compressImage(file, 1200, 0.8)
+        .then(compressedBase64 => {
+            currentTurbinePhoto = compressedBase64;
             
-            currentTurbinePhoto = e.target.result;
-            
-            // Save photo for current parameter
             const fullLabel = AREAS[activeArea][activeIdx];
             if (!turbinePhotos[activeArea]) turbinePhotos[activeArea] = {};
             turbinePhotos[activeArea][fullLabel] = currentTurbinePhoto;
             
-            // Save to localStorage
-            localStorage.setItem(DRAFT_KEYS.PHOTOS_TURBINE, JSON.stringify(turbinePhotos));
+            try {
+                localStorage.setItem(DRAFT_KEYS.PHOTOS_TURBINE, JSON.stringify(turbinePhotos));
+            } catch (e) {
+                console.warn('LocalStorage penuh, foto disimpan di memori saja');
+            }
             
             updateTurbinePhotoPreview();
-            showCustomAlert('Foto berhasil diambil!', 'success');
+            renderProgressDots(); // Update indicator foto
             
-        } catch (err) {
-            console.error('❌ Error saving photo:', err);
-            showCustomAlert('Gagal menyimpan foto.', 'error');
-        }
-    };
+            const sizeMB = (compressedBase64.length / 1024 / 1024).toFixed(1);
+            showCustomAlert(`Foto berhasil dikompres (${sizeMB}MB)`, 'success');
+        })
+        .catch(err => {
+            console.error('❌ Error:', err);
+            showCustomAlert('Gagal memproses foto. Coba foto lain.', 'error');
+            event.target.value = '';
+            updateTurbinePhotoPreview();
+        });
+}
+
+// [FIXED] CT Photo Handler dengan kompresi
+function handleCTPhoto(event) {
+    const file = event.target.files[0];
     
-    reader.readAsDataURL(file);
+    if (!file) return;
+    
+    if (file.size > 10 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 10MB.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    if (!file.type.startsWith('image/')) {
+        showCustomAlert('File harus berupa gambar.', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    const preview = document.getElementById('ctPhotoPreview');
+    if (preview) {
+        preview.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #64748b; font-size: 0.875rem;">⏳ Memproses...</div>';
+    }
+
+    compressImage(file, 1200, 0.8)
+        .then(compressedBase64 => {
+            currentCTPhoto = compressedBase64;
+            
+            const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
+            if (!ctPhotos[activeAreaCT]) ctPhotos[activeAreaCT] = {};
+            ctPhotos[activeAreaCT][fullLabel] = currentCTPhoto;
+            
+            try {
+                localStorage.setItem(DRAFT_KEYS.PHOTOS_CT, JSON.stringify(ctPhotos));
+            } catch (e) {
+                console.warn('LocalStorage penuh');
+            }
+            
+            updateCTPhotoPreview();
+            renderCTProgressDots();
+            
+            showCustomAlert('Foto berhasil dikompres!', 'success');
+        })
+        .catch(err => {
+            console.error('❌ Error:', err);
+            showCustomAlert('Gagal memproses foto.', 'error');
+            event.target.value = '';
+        });
 }
 
 function updateTurbinePhotoPreview() {
@@ -1921,62 +2014,6 @@ function resetTurbinePhoto() {
     updateTurbinePhotoPreview();
 }
 
-// CT Photo Functions - DENGAN ERROR HANDLING LENGKAP
-function handleCTPhoto(event) {
-    const file = event.target.files[0];
-    
-    console.log('📸 CT photo selected:', file);
-    
-    if (!file) {
-        console.warn('No file selected');
-        return;
-    }
-    
-    if (file.size > 5 * 1024 * 1024) {
-        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
-        event.target.value = '';
-        return;
-    }
-    
-    if (!file.type.startsWith('image/')) {
-        showCustomAlert('File harus berupa gambar.', 'error');
-        event.target.value = '';
-        return;
-    }
-    
-    const reader = new FileReader();
-    
-    reader.onerror = function(error) {
-        console.error('❌ FileReader error:', error);
-        showCustomAlert('Gagal membaca foto. Coba lagi.', 'error');
-    };
-    
-    reader.onload = function(e) {
-        try {
-            console.log('✅ CT File loaded successfully');
-            
-            currentCTPhoto = e.target.result;
-            
-            // Save photo for current parameter
-            const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
-            if (!ctPhotos[activeAreaCT]) ctPhotos[activeAreaCT] = {};
-            ctPhotos[activeAreaCT][fullLabel] = currentCTPhoto;
-            
-            // Save to localStorage
-            localStorage.setItem(DRAFT_KEYS.PHOTOS_CT, JSON.stringify(ctPhotos));
-            
-            updateCTPhotoPreview();
-            showCustomAlert('Foto berhasil diambil!', 'success');
-            
-        } catch (err) {
-            console.error('❌ Error saving CT photo:', err);
-            showCustomAlert('Gagal menyimpan foto.', 'error');
-        }
-    };
-    
-    reader.readAsDataURL(file);
-}
-
 function updateCTPhotoPreview() {
     const preview = document.getElementById('ctPhotoPreview');
     const photoSection = document.getElementById('ctPhotoSection');
@@ -2018,8 +2055,30 @@ function resetCTPhoto() {
     updateCTPhotoPreview();
 }
 
+// [FIXED] Helper untuk menyimpan offline
+function saveOfflineLogsheet(type = 'TURBINE') {
+    try {
+        const storageKey = type === 'CT' ? DRAFT_KEYS_CT.OFFLINE : DRAFT_KEYS.LOGSHEET_OFFLINE;
+        let offlineData = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        
+        offlineData.push({
+            type: type,
+            data: type === 'CT' ? currentInputCT : currentInput,
+            photos: type === 'CT' ? ctPhotos : turbinePhotos,
+            timestamp: new Date().toISOString(),
+            user: currentUser?.name || 'Unknown',
+            userId: currentUser?.id || 'Unknown'
+        });
+        
+        localStorage.setItem(storageKey, JSON.stringify(offlineData));
+        console.log(`💾 Data ${type} disimpan offline`);
+    } catch (e) {
+        console.error('Error saving offline:', e);
+    }
+}
+
 // ============================================
-// 12. LOGSHEET FUNCTIONS (TURBINE) - DIPERBAIKI
+// 12. LOGSHEET FUNCTIONS (TURBINE) - FIXED
 // ============================================
 
 function fetchLastData() {
@@ -2494,14 +2553,20 @@ function goBack() {
     }
 }
 
-// FUNGSI SEND TO SHEET - DIPERBAIKI DENGAN UPLOAD FOTO
+// [FIXED] Logsheet Send Function dengan CORS fix dan offline storage
 async function sendToSheet() {
     if (!requireAuth()) return;
     
+    if (Object.keys(currentInput).length === 0) {
+        showCustomAlert('Tidak ada data untuk dikirim!', 'error');
+        return;
+    }
+    
     const progress = showUploadProgress('Mengirim Logsheet...');
+    currentUploadController = new AbortController();
     
     try {
-        // 1. Kumpulkan semua data logsheet
+        // 1. Kumpulkan data
         let allParameters = {};
         Object.entries(currentInput).forEach(([areaName, params]) => {
             Object.entries(params).forEach(([paramName, value]) => {
@@ -2509,7 +2574,7 @@ async function sendToSheet() {
             });
         });
         
-        // 2. Upload semua foto ke Google Drive
+        // 2. Upload foto dengan timeout per foto
         let photoUrls = {};
         let uploadedCount = 0;
         let failedCount = 0;
@@ -2522,71 +2587,95 @@ async function sendToSheet() {
                 }
             });
         });
-        
+
         const totalPhotos = photoEntries.length;
-        
+
         if (totalPhotos > 0) {
-            progress.updateText(`Mengupload ${totalPhotos} foto ke Drive...`);
+            progress.updateText(`Mengupload ${photoEntries.length} foto...`);
             
+            // [FIXED] Upload sequential dengan timeout
             for (let i = 0; i < photoEntries.length; i++) {
                 const { areaName, paramName, photoData } = photoEntries[i];
                 
                 try {
-                    progress.updateText(`Upload foto ${i + 1}/${totalPhotos}...`);
+                    progress.updateText(`Upload foto ${i + 1}/${photoEntries.length}...`);
                     
-                    const fileName = `TURBINE_${areaName}_${paramName}_${Date.now()}`;
-                    const url = await uploadPhotoToDrive(photoData, fileName, 'TURBINE');
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Timeout')), 30000)
+                    );
+                    
+                    const uploadPromise = uploadPhotoToDrive(
+                        photoData, 
+                        `TURBINE_${areaName}_${paramName}_${Date.now()}.jpg`, 
+                        'TURBINE'
+                    );
+                    
+                    const url = await Promise.race([uploadPromise, timeoutPromise]);
                     
                     if (url && !url.includes('ERROR')) {
                         photoUrls[`${paramName}_photo`] = url;
                         uploadedCount++;
-                        console.log(`✅ Uploaded ${paramName}:`, url);
                     } else {
-                        photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
-                        failedCount++;
-                        console.error(`❌ Failed upload ${paramName}`);
+                        throw new Error('Upload failed');
                     }
                 } catch (err) {
-                    console.error(`❌ Error uploading ${paramName}:`, err);
+                    console.error(`❌ Failed ${paramName}:`, err);
                     photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
                     failedCount++;
                 }
             }
         }
         
-        // 3. Siapkan data final
-        const finalData = {
+        // 3. Payload final
+        const payload = {
             type: 'LOGSHEET',
-            Operator: currentUser ? currentUser.name : 'Unknown',
-            OperatorId: currentUser ? currentUser.id : 'Unknown',
+            Operator: currentUser?.name || 'Unknown',
+            OperatorId: currentUser?.id || 'Unknown',
+            timestamp: new Date().toISOString(),
             ...allParameters,
             ...photoUrls,
-            _photoCount: totalPhotos,
-            _uploadedCount: uploadedCount,
-            _failedCount: failedCount
+            _metadata: {
+                photoCount: photoEntries.length,
+                uploadedCount: uploadedCount,
+                failedCount: failedCount,
+                version: APP_VERSION
+            }
         };
         
-        console.log('📤 Sending Logsheet Data:', finalData);
+        console.log('📤 Sending:', payload);
+        progress.updateText('Mengirim ke server...');
         
-        progress.updateText('Mengirim data ke server...');
-        
-        // 4. Kirim ke Google Sheets
-        await fetch(GAS_URL, {
+        // [FIXED] Fetch dengan CORS (hapus mode: 'no-cors')
+        const response = await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(finalData)
+            headers: { 
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+            signal: currentUploadController.signal
         });
+        
+        // [FIXED] Cek response
+        let result;
+        try {
+            const text = await response.text();
+            result = text ? JSON.parse(text) : { success: true };
+        } catch (e) {
+            result = { success: response.ok };
+        }
+        
+        if (!response.ok && !result.success) {
+            throw new Error(result.error || `Server error: ${response.status}`);
+        }
         
         progress.complete();
         
-        let successMsg = '✓ Data berhasil dikirim!';
-        if (failedCount > 0) {
-            successMsg += ` (${failedCount} foto gagal upload)`;
-        }
-        showCustomAlert(successMsg, 'success');
+        let msg = '✓ Data berhasil dikirim!';
+        if (uploadedCount > 0) msg += ` (${uploadedCount} foto)`;
+        if (failedCount > 0) msg += `, ${failedCount} foto gagal`;
+        showCustomAlert(msg, 'success');
         
-        // 5. Clear data setelah sukses
+        // Clear data
         currentInput = {};
         turbinePhotos = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
@@ -2595,26 +2684,25 @@ async function sendToSheet() {
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
-        console.error('❌ Error sending data:', error);
+        console.error('❌ Error:', error);
         progress.error();
         
-        // Simpan ke offline storage jika gagal
-        let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
-        offlineData.push({
-            ...allParameters,
-            photos: turbinePhotos,
-            timestamp: new Date().toISOString()
-        });
-        localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
+        // [FIXED] Simpan offline untuk retry
+        saveOfflineLogsheet('TURBINE');
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengirim. Data disimpan lokal untuk dikirim ulang nanti.', 'error');
+            showCustomAlert(
+                `Gagal mengirim: ${error.message}. Data tersimpan lokal.`, 
+                'error'
+            );
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
 // ============================================
-// 13. TPM FUNCTIONS
+// 13. TPM FUNCTIONS (FIXED)
 // ============================================
 
 function updateTPMUserInfo() {
@@ -2678,8 +2766,8 @@ function handleTPMPhoto(event) {
     const file = event.target.files[0];
     if (!file) return;
     
-    if (file.size > 5 * 1024 * 1024) {
-        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
+    if (file.size > 10 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 10MB.', 'error');
         event.target.value = '';
         return;
     }
@@ -2728,6 +2816,7 @@ function selectTPMStatus(status) {
     }
 }
 
+// [FIXED] TPM Send Function
 async function submitTPMData() {
     if (!requireAuth()) return;
     
@@ -2735,32 +2824,42 @@ async function submitTPMData() {
     const action = document.getElementById('tpmAction')?.value || '';
     
     if (!currentTPMStatus) {
-        showCustomAlert('Pilih status kondisi terlebih dahulu!', 'error');
+        showCustomAlert('Pilih status kondisi!', 'error');
         return;
     }
     
     if (!currentTPMPhoto) {
-        showCustomAlert('Ambil foto dokumentasi terlebih dahulu!', 'error');
+        showCustomAlert('Ambil foto dokumentasi!', 'error');
         return;
     }
     
     if (!action) {
-        showCustomAlert('Pilih tindakan yang dilakukan!', 'error');
+        showCustomAlert('Pilih tindakan!', 'error');
         return;
     }
     
-    const progress = showUploadProgress('Mengupload TPM & Foto...');
+    const progress = showUploadProgress('Mengupload TPM...');
+    currentUploadController = new AbortController();
     
     try {
-        // Upload foto TPM ke Drive dulu
-        progress.updateText('Mengupload foto TPM...');
-        let photoUrl = 'NO_PHOTO';
+        // [FIXED] Upload foto dengan timeout
+        progress.updateText('Mengupload foto...');
         
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout')), 30000)
+        );
+        
+        const uploadPromise = uploadPhotoToDrive(
+            currentTPMPhoto, 
+            `TPM_${activeTPMArea}_${Date.now()}.jpg`, 
+            'TPM'
+        );
+        
+        let photoUrl;
         try {
-            const fileName = `TPM_${activeTPMArea}_${Date.now()}`;
-            photoUrl = await uploadPhotoToDrive(currentTPMPhoto, fileName, 'TPM');
-        } catch (uploadErr) {
-            console.error('TPM Photo upload failed:', uploadErr);
+            photoUrl = await Promise.race([uploadPromise, timeoutPromise]);
+        } catch (err) {
+            console.warn('Foto gagal, lanjut tanpa foto:', err);
             photoUrl = 'UPLOAD_FAILED';
         }
         
@@ -2773,32 +2872,43 @@ async function submitTPMData() {
             action: action,
             notes: notes,
             photo: photoUrl,
-            user: currentUser ? currentUser.name : 'Unknown',
-            timestamp: new Date().toISOString()
+            user: currentUser?.name || 'Unknown',
+            userId: currentUser?.id || 'Unknown',
+            timestamp: new Date().toISOString(),
+            version: APP_VERSION
         };
         
-        await fetch(GAS_URL, {
+        // [FIXED] Fetch tanpa mode: 'no-cors'
+        const response = await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(tpmData)
+            body: JSON.stringify(tpmData),
+            signal: currentUploadController.signal
         });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
         
         progress.complete();
         
+        // Simpan history
         let tpmHistory = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_HISTORY) || '[]');
-        tpmHistory.push({...tpmData, photo: '[UPLOADED]'});
+        tpmHistory.push({...tpmData, submittedAt: new Date().toISOString()});
         localStorage.setItem(DRAFT_KEYS.TPM_HISTORY, JSON.stringify(tpmHistory));
         
-        showCustomAlert(`✓ Data TPM ${activeTPMArea} berhasil disimpan!`, 'success');
+        showCustomAlert(`✓ Data TPM berhasil disimpan!`, 'success');
+        
         currentTPMPhoto = null;
         currentTPMStatus = '';
         
         setTimeout(() => navigateTo('tpmScreen'), 1500);
         
     } catch (error) {
+        console.error('TPM Error:', error);
         progress.error();
         
+        // [FIXED] Simpan offline
         let offlineTPM = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_OFFLINE) || '[]');
         offlineTPM.push({
             type: 'TPM',
@@ -2807,14 +2917,16 @@ async function submitTPMData() {
             action: action,
             notes: notes,
             photo: currentTPMPhoto,
-            user: currentUser ? currentUser.name : 'Unknown',
+            user: currentUser?.name || 'Unknown',
             timestamp: new Date().toISOString()
         });
         localStorage.setItem(DRAFT_KEYS.TPM_OFFLINE, JSON.stringify(offlineTPM));
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengupload. Data disimpan lokal.', 'error');
+            showCustomAlert('Gagal mengupload. Data disimpan lokal.', 'warning');
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
@@ -3498,7 +3610,7 @@ function toggleSS2000Detail() {
 }
 
 // ============================================
-// 15. CT LOGSHEET FUNCTIONS - DIPERBAIKI
+// 15. CT LOGSHEET FUNCTIONS - FIXED
 // ============================================
 
 function fetchLastDataCT() {
@@ -4019,14 +4131,19 @@ function goBackCT() {
     }
 }
 
-// FUNGSI SEND CT TO SHEET - DIPERBAIKI DENGAN UPLOAD FOTO
+// [FIXED] CT Logsheet Send Function dengan CORS fix
 async function sendCTToSheet() {
     if (!requireAuth()) return;
     
+    if (Object.keys(currentInputCT).length === 0) {
+        showCustomAlert('Tidak ada data CT untuk dikirim!', 'error');
+        return;
+    }
+    
     const progress = showUploadProgress('Mengirim Logsheet CT...');
+    currentUploadController = new AbortController();
     
     try {
-        // 1. Kumpulkan semua data CT
         let allParameters = {};
         Object.entries(currentInputCT).forEach(([areaName, params]) => {
             Object.entries(params).forEach(([paramName, value]) => {
@@ -4034,7 +4151,7 @@ async function sendCTToSheet() {
             });
         });
         
-        // 2. Upload semua foto CT ke Google Drive
+        // Upload foto CT
         let photoUrls = {};
         let uploadedCount = 0;
         let failedCount = 0;
@@ -4047,71 +4164,76 @@ async function sendCTToSheet() {
                 }
             });
         });
-        
-        const totalPhotos = photoEntries.length;
-        
-        if (totalPhotos > 0) {
-            progress.updateText(`Mengupload ${totalPhotos} foto CT ke Drive...`);
+
+        if (photoEntries.length > 0) {
+            progress.updateText(`Mengupload ${photoEntries.length} foto CT...`);
             
             for (let i = 0; i < photoEntries.length; i++) {
                 const { areaName, paramName, photoData } = photoEntries[i];
                 
                 try {
-                    progress.updateText(`Upload CT foto ${i + 1}/${totalPhotos}...`);
+                    progress.updateText(`Upload CT ${i + 1}/${photoEntries.length}...`);
                     
-                    const fileName = `CT_${areaName}_${paramName}_${Date.now()}`;
-                    const url = await uploadPhotoToDrive(photoData, fileName, 'CT');
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Timeout')), 30000)
+                    );
+                    
+                    const uploadPromise = uploadPhotoToDrive(
+                        photoData, 
+                        `CT_${areaName}_${paramName}_${Date.now()}.jpg`, 
+                        'CT'
+                    );
+                    
+                    const url = await Promise.race([uploadPromise, timeoutPromise]);
                     
                     if (url && !url.includes('ERROR')) {
                         photoUrls[`${paramName}_photo`] = url;
                         uploadedCount++;
-                        console.log(`✅ CT Uploaded ${paramName}:`, url);
                     } else {
-                        photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
-                        failedCount++;
-                        console.error(`❌ CT Failed upload ${paramName}`);
+                        throw new Error('Upload failed');
                     }
                 } catch (err) {
-                    console.error(`❌ CT Error uploading ${paramName}:`, err);
+                    console.error(`❌ CT Upload failed ${paramName}:`, err);
                     photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
                     failedCount++;
                 }
             }
         }
         
-        // 3. Siapkan data final
-        const finalData = {
+        const payload = {
             type: 'LOGSHEET_CT',
-            Operator: currentUser ? currentUser.name : 'Unknown',
-            OperatorId: currentUser ? currentUser.id : 'Unknown',
+            Operator: currentUser?.name || 'Unknown',
+            OperatorId: currentUser?.id || 'Unknown',
+            timestamp: new Date().toISOString(),
             ...allParameters,
             ...photoUrls,
-            _photoCount: totalPhotos,
-            _uploadedCount: uploadedCount,
-            _failedCount: failedCount
+            _metadata: {
+                photoCount: photoEntries.length,
+                uploadedCount: uploadedCount,
+                failedCount: failedCount,
+                version: APP_VERSION
+            }
         };
         
-        console.log('📤 Sending CT Logsheet Data:', finalData);
+        progress.updateText('Mengirim data CT...');
         
-        progress.updateText('Mengirim data CT ke server...');
-        
-        // 4. Kirim ke Google Sheets
-        await fetch(GAS_URL, {
+        const response = await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(finalData)
+            body: JSON.stringify(payload),
+            signal: currentUploadController.signal
         });
+        
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.status}`);
+        }
         
         progress.complete();
         
-        let successMsg = '✓ Data CT berhasil dikirim!';
-        if (failedCount > 0) {
-            successMsg += ` (${failedCount} foto gagal upload)`;
-        }
-        showCustomAlert(successMsg, 'success');
+        let msg = '✓ Data CT berhasil dikirim!';
+        if (uploadedCount > 0) msg += ` (${uploadedCount} foto)`;
+        showCustomAlert(msg, 'success');
         
-        // 5. Clear data setelah sukses
         currentInputCT = {};
         ctPhotos = {};
         localStorage.removeItem(DRAFT_KEYS_CT.LOGSHEET);
@@ -4120,21 +4242,16 @@ async function sendCTToSheet() {
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
     } catch (error) {
-        console.error('❌ Error sending CT data:', error);
+        console.error('❌ CT Error:', error);
         progress.error();
         
-        // Simpan ke offline storage jika gagal
-        let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS_CT.OFFLINE) || '[]');
-        offlineData.push({
-            ...allParameters,
-            photos: ctPhotos,
-            timestamp: new Date().toISOString()
-        });
-        localStorage.setItem(DRAFT_KEYS_CT.OFFLINE, JSON.stringify(offlineData));
+        saveOfflineLogsheet('CT');
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengirim data CT. Data disimpan lokal.', 'error');
+            showCustomAlert(`Gagal: ${error.message}. Data tersimpan lokal.`, 'error');
         }, 500);
+    } finally {
+        currentUploadController = null;
     }
 }
 
