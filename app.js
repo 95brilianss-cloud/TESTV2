@@ -1,13 +1,13 @@
 // ============================================
 // TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.5.6 (FIXED - Compression & CORS)
+// Version: 1.5.8 (FIXED - CORS & Storage)
 // PT Petrokimia Gresik Unit III B
 // ============================================
 
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.7';
+const APP_VERSION = '1.5.8';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -36,7 +36,7 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbxiHILd473T21NZ8QLsN7lHMEeGPkrypiWrde_o2S2aHR576H1JqtdUjQgkNt8HYeMG/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyxlpnj2bn6xMsnhQWSjDDHB0_b3CbXp6Q7NW-V6ke80KxTrtxsrGsQN1HSLMK_smA/exec";
 
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
@@ -490,10 +490,9 @@ async function uploadPhotoToDrive(photoData, fileName, type) {
             timestamp: new Date().toISOString()
         };
         
-        // Method 1: Coba dengan fetch POST langsung (untuk CORS yang support)
+        // [FIXED] Hapus mode: 'no-cors', gunakan CORS normal dengan JSONP fallback
         fetch(GAS_URL, {
             method: 'POST',
-            mode: 'cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         })
@@ -511,7 +510,7 @@ async function uploadPhotoToDrive(photoData, fileName, type) {
             }
         })
         .catch(err => {
-            console.log('Fetch failed, trying JSONP fallback:', err);
+            console.log('Fetch CORS failed, trying JSONP fallback:', err);
             
             // Method 2: Fallback ke JSONP jika CORS gagal
             try {
@@ -1343,6 +1342,7 @@ async function handleAddUser(e) {
     }
 }
 
+// [FIXED] Hapus mode: 'no-cors' dari fetch
 function addUserToServer(userData) {
     return new Promise((resolve, reject) => {
         const payload = {
@@ -1353,14 +1353,35 @@ function addUserToServer(userData) {
             userData: userData
         };
         
+        // [FIXED] Gunakan fetch tanpa mode: 'no-cors'
         fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         })
-        .then(() => resolve({ success: true }))
-        .catch(reject);
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        })
+        .then(data => resolve(data))
+        .catch(err => {
+            console.error('Add user error:', err);
+            // Fallback ke JSONP
+            const callbackName = 'addUserCallback_' + Date.now();
+            window[callbackName] = (response) => {
+                cleanupJSONP(callbackName);
+                resolve(response);
+            };
+            
+            const script = document.createElement('script');
+            const encodedPayload = encodeURIComponent(JSON.stringify(payload));
+            script.src = `${GAS_URL}?callback=${callbackName}&payload=${encodedPayload}`;
+            script.onerror = () => {
+                cleanupJSONP(callbackName);
+                reject(new Error('Network error'));
+            };
+            document.body.appendChild(script);
+        });
     });
 }
 
@@ -1378,7 +1399,6 @@ async function toggleUserStatus(username) {
         
         await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
@@ -1416,7 +1436,6 @@ async function deleteUser(username) {
         
         await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
@@ -1819,7 +1838,7 @@ function cancelUpload() {
 // ============================================
 
 // [NEW] Fungsi kompresi foto
-function compressImage(file, maxWidth = 1200, quality = 0.8) {
+function compressImage(file, maxWidth = 800, quality = 0.6) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         
@@ -1891,7 +1910,7 @@ function handleTurbinePhoto(event) {
     }
 
     // [FIXED] Kompresi sebelum menyimpan
-    compressImage(file, 1200, 0.8)
+    compressImage(file, 800, 0.6)
         .then(compressedBase64 => {
             currentTurbinePhoto = compressedBase64;
             
@@ -1942,7 +1961,7 @@ function handleCTPhoto(event) {
         preview.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #64748b; font-size: 0.875rem;">⏳ Memproses...</div>';
     }
 
-    compressImage(file, 1200, 0.8)
+    compressImage(file, 800, 0.6)
         .then(compressedBase64 => {
             currentCTPhoto = compressedBase64;
             
@@ -2055,23 +2074,24 @@ function resetCTPhoto() {
     updateCTPhotoPreview();
 }
 
-// [FIXED] Helper untuk menyimpan offline
+// [FIXED] Helper untuk menyimpan offline - JANGAN simpan foto base64!
 function saveOfflineLogsheet(type = 'TURBINE') {
     try {
         const storageKey = type === 'CT' ? DRAFT_KEYS_CT.OFFLINE : DRAFT_KEYS.LOGSHEET_OFFLINE;
         let offlineData = JSON.parse(localStorage.getItem(storageKey) || '[]');
         
+        // [FIXED] Simpan data saja, tidak usah simpan foto base64 ke localStorage
         offlineData.push({
             type: type,
             data: type === 'CT' ? currentInputCT : currentInput,
-            photos: type === 'CT' ? ctPhotos : turbinePhotos,
+            photoCount: type === 'CT' ? Object.keys(ctPhotos).length : Object.keys(turbinePhotos).length,
             timestamp: new Date().toISOString(),
             user: currentUser?.name || 'Unknown',
             userId: currentUser?.id || 'Unknown'
         });
         
         localStorage.setItem(storageKey, JSON.stringify(offlineData));
-        console.log(`💾 Data ${type} disimpan offline`);
+        console.log(`💾 Data ${type} disimpan offline (tanpa foto base64)`);
     } catch (e) {
         console.error('Error saving offline:', e);
     }
@@ -2655,12 +2675,13 @@ async function sendToSheet() {
             signal: currentUploadController.signal
         });
         
-        // [FIXED] Cek response
+        // [FIXED] Cek response dengan error handling yang benar
         let result;
         try {
             const text = await response.text();
             result = text ? JSON.parse(text) : { success: true };
         } catch (e) {
+            console.error('Invalid JSON response:', text);
             result = { success: response.ok };
         }
         
@@ -2687,12 +2708,12 @@ async function sendToSheet() {
         console.error('❌ Error:', error);
         progress.error();
         
-        // [FIXED] Simpan offline untuk retry
+        // [FIXED] Simpan offline untuk retry - tanpa foto base64
         saveOfflineLogsheet('TURBINE');
         
         setTimeout(() => {
             showCustomAlert(
-                `Gagal mengirim: ${error.message}. Data tersimpan lokal.`, 
+                `Gagal mengirim: ${error.message}. Data tersimpan lokal (tanpa foto).`, 
                 'error'
             );
         }, 500);
@@ -2816,7 +2837,7 @@ function selectTPMStatus(status) {
     }
 }
 
-// [FIXED] TPM Send Function
+// [FIXED] TPM Send Function - Hapus mode: 'no-cors'
 async function submitTPMData() {
     if (!requireAuth()) return;
     
@@ -2886,7 +2907,16 @@ async function submitTPMData() {
             signal: currentUploadController.signal
         });
         
-        if (!response.ok) {
+        // [FIXED] Error handling untuk response HTML
+        let result;
+        try {
+            const text = await response.text();
+            result = text ? JSON.parse(text) : { success: response.ok };
+        } catch (e) {
+            result = { success: response.ok };
+        }
+        
+        if (!response.ok && !result.success) {
             throw new Error(`HTTP ${response.status}`);
         }
         
@@ -2908,7 +2938,7 @@ async function submitTPMData() {
         console.error('TPM Error:', error);
         progress.error();
         
-        // [FIXED] Simpan offline
+        // [FIXED] Simpan offline tanpa foto base64 untuk hindari QuotaExceededError
         let offlineTPM = JSON.parse(localStorage.getItem(DRAFT_KEYS.TPM_OFFLINE) || '[]');
         offlineTPM.push({
             type: 'TPM',
@@ -2916,14 +2946,14 @@ async function submitTPMData() {
             status: currentTPMStatus,
             action: action,
             notes: notes,
-            photo: currentTPMPhoto,
+            photo: 'PENDING_UPLOAD', // [FIXED] Jangan simpan base64!
             user: currentUser?.name || 'Unknown',
             timestamp: new Date().toISOString()
         });
         localStorage.setItem(DRAFT_KEYS.TPM_OFFLINE, JSON.stringify(offlineTPM));
         
         setTimeout(() => {
-            showCustomAlert('Gagal mengupload. Data disimpan lokal.', 'warning');
+            showCustomAlert('Gagal mengupload. Data disimpan lokal (tanpa foto).', 'warning');
         }, 500);
     } finally {
         currentUploadController = null;
@@ -2931,7 +2961,7 @@ async function submitTPMData() {
 }
 
 // ============================================
-// 14. BALANCING FUNCTIONS
+// 14. BALANCING FUNCTIONS (FIXED)
 // ============================================
 
 function initBalancingScreen() {
@@ -3481,6 +3511,7 @@ function formatWhatsAppMessage(data) {
     return message;
 }
 
+// [FIXED] Submit Balancing - Hapus mode: 'no-cors'
 async function submitBalancingData() {
     if (!requireAuth()) return;
     
@@ -3563,12 +3594,26 @@ async function submitBalancingData() {
         await new Promise(resolve => setTimeout(resolve, 500));
         
         progress.updateText('Mengirim ke server...');
-        await fetch(GAS_URL, {
+        
+        // [FIXED] Hapus mode: 'no-cors'
+        const response = await fetch(GAS_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(balancingData)
         });
+        
+        // [FIXED] Error handling
+        let result;
+        try {
+            const text = await response.text();
+            result = text ? JSON.parse(text) : { success: response.ok };
+        } catch (e) {
+            result = { success: response.ok };
+        }
+        
+        if (!response.ok && !result.success) {
+            throw new Error(`HTTP ${response.status}`);
+        }
         
         progress.complete();
         showCustomAlert('✓ Data Balancing berhasil dikirim!', 'success');
