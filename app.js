@@ -1,20 +1,20 @@
 // ============================================
 // TURBINE LOGSHEET PRO - FULL APPLICATION
-// Version: 1.4.7 (Fixed Sync & Structure)
+// Version: 1.5.0 (With Photo Validation Feature)
 // ============================================
 
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
     SESSION_KEY: 'turbine_session',
     USER_KEY: 'turbine_user',
     USERS_CACHE_KEY: 'turbine_users_cache',
-    SESSION_DURATION: 8 * 60 * 60 * 1000,        // 8 jam
-    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000  // 30 hari
+    SESSION_DURATION: 8 * 60 * 60 * 1000,
+    REMEMBER_ME_DURATION: 30 * 24 * 60 * 60 * 1000
 };
 
 const DRAFT_KEYS = {
@@ -25,7 +25,9 @@ const DRAFT_KEYS = {
     LOGSHEET_OFFLINE: 'offline_logsheets',
     BALANCING_OFFLINE: 'balancing_offline',
     TPM_HISTORY: 'tpm_history',
-    BALANCING_HISTORY: 'balancing_history'
+    BALANCING_HISTORY: 'balancing_history',
+    PHOTOS_TURBINE: 'photos_turbine',
+    PHOTOS_CT: 'photos_ct'
 };
 
 const DRAFT_KEYS_CT = {
@@ -33,17 +35,14 @@ const DRAFT_KEYS_CT = {
     OFFLINE: 'offline_ct_logsheets'
 };
 
-// URL Google Apps Script Backend
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwFbSYmZh2nEZPgWmdOUVsgHkppSaYxKdDY055TzRCsGUZ3aNJmOUA1aTEcLK2Sdtk/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyI_ovHFPYYl9MOVLgxjPmnT_y4c3nEy4rEoXRJaaxr33N9_gqC4uhngz3yAURPC6lG/exec";
 
-// Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
     'admin': { password: 'admin123', role: 'admin', name: 'Administrator', department: 'Unit Utilitas 3B' },
     'operator': { password: 'operator123', role: 'operator', name: 'Operator Shift', department: 'Unit Utilitas 3B' },
     'utilitas3b': { password: 'pgresik2024', role: 'operator', name: 'Unit Utilitas 3B', department: 'Unit Utilitas 3B' }
 };
 
-// Field configuration untuk Balancing
 const BALANCING_FIELDS = [
     'balancingDate', 'balancingTime',
     'loadMW', 'eksporMW',
@@ -64,7 +63,6 @@ const BALANCING_FIELDS = [
 // 2. DATA STRUKTUR AREA
 // ============================================
 
-// Struktur Area Turbine Logsheet
 const AREAS = {
     "Steam Inlet Turbine": [
         "MPS Inlet 30-TP-6101 PI-6114 (kg/cm2)", 
@@ -196,7 +194,6 @@ const AREAS = {
     ]
 };
 
-// Struktur Area CT Logsheet
 const AREAS_CT = {
     "BASIN SA": [
         "D-6511 LEVEL BASIN",
@@ -266,6 +263,12 @@ let currentUploadController = null;
 let deferredPrompt = null;
 let installBannerShown = false;
 
+// Photo validation state variables
+let currentTurbinePhoto = null;
+let currentCTPhoto = null;
+let turbinePhotos = {};
+let ctPhotos = {};
+
 // CT State Variables
 let lastDataCT = {};
 let currentInputCT = {};
@@ -278,7 +281,6 @@ let currentInputTypeCT = 'text';
 // 4. INITIALIZATION & SERVICE WORKER
 // ============================================
 
-// Inisialisasi data dari localStorage
 function initState() {
     try {
         const savedDraft = localStorage.getItem(DRAFT_KEYS.LOGSHEET);
@@ -287,6 +289,13 @@ function initState() {
         const savedCTDraft = localStorage.getItem(DRAFT_KEYS_CT.LOGSHEET);
         if (savedCTDraft) currentInputCT = JSON.parse(savedCTDraft);
         
+        // Load saved photos
+        const savedTurbinePhotos = localStorage.getItem(DRAFT_KEYS.PHOTOS_TURBINE);
+        if (savedTurbinePhotos) turbinePhotos = JSON.parse(savedTurbinePhotos);
+        
+        const savedCTPhotos = localStorage.getItem(DRAFT_KEYS.PHOTOS_CT);
+        if (savedCTPhotos) ctPhotos = JSON.parse(savedCTPhotos);
+        
         totalParams = Object.values(AREAS).reduce((acc, arr) => acc + arr.length, 0);
         totalParamsCT = Object.values(AREAS_CT).reduce((acc, arr) => acc + arr.length, 0);
     } catch (e) {
@@ -294,7 +303,6 @@ function initState() {
     }
 }
 
-// Register Service Worker untuk PWA
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register(`./sw.js?v=${APP_VERSION}`)
@@ -364,7 +372,6 @@ function showCustomAlert(msg, type = 'success') {
     alertMessage.innerText = msg;
     alertContent.className = 'alert-content ' + type;
     
-    // Set icon berdasarkan tipe
     const icons = {
         success: `<div class="alert-icon-bg"></div><svg class="alert-icon-svg" viewBox="0 0 52 52"><circle cx="26" cy="26" r="25"/><path d="M14.1 27.2l7.1 7.2 16.7-16.8"/></svg>`,
         error: `<div class="alert-icon-bg" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"></div><svg class="alert-icon-svg" viewBox="0 0 52 52" style="stroke: #ef4444"><circle cx="26" cy="26" r="25"/><path d="M16 16 L36 36 M36 16 L16 36"/></svg>`,
@@ -405,7 +412,6 @@ function navigateTo(screenId) {
         targetScreen.classList.add('active');
         window.scrollTo(0, 0);
         
-        // Screen-specific initialization
         if (screenId === 'homeScreen') {
             loadUserStats();
             setTimeout(() => {
@@ -541,7 +547,6 @@ async function loginOperator() {
     
     let onlineSuccess = false;
     
-    // Coba login online dulu
     if (navigator.onLine) {
         try {
             const result = await validateUserOnline(username, password);
@@ -557,7 +562,6 @@ async function loginOperator() {
         }
     }
     
-    // Jika online gagal atau offline, coba dari cache/legacy
     const offlineResult = validateUserOffline(username, password);
     
     if (offlineResult.success) {
@@ -675,11 +679,9 @@ function handleLoginSuccess(userData, username, password, isOffline = false) {
             loginBtn.innerHTML = '<span>🔓 Masuk</span>';
         }
         
-        // PERBAIKAN: Deklarasikan variabel passwordInput sebelum digunakan
         const passwordInput = document.getElementById('operatorPassword');
         if (passwordInput) passwordInput.value = '';
         
-        // Trigger sync untuk admin setelah login berhasil
         if (!isOffline && userData.role === 'admin') {
             setTimeout(syncUsersForOffline, 2000);
         }
@@ -733,6 +735,7 @@ function updateUserCache(username, password, userData) {
         console.error('Error saving cache:', e);
     }
 }
+
 function updatePasswordInCache(username, newPassword) {
     if (!username) return;
     
@@ -747,6 +750,7 @@ function updatePasswordInCache(username, newPassword) {
         console.log('Password updated in cache for:', username);
     }
 }
+
 function loadUsersCache() {
     if (usersCache) return usersCache;
     try {
@@ -766,14 +770,6 @@ function showLoginError(message) {
     if (errorMsg) {
         errorMsg.textContent = message;
         errorMsg.style.display = 'block';
-        errorMsg.style.color = '#ef4444';
-        errorMsg.style.fontSize = '0.875rem';
-        errorMsg.style.marginTop = '8px';
-        errorMsg.style.textAlign = 'center';
-        errorMsg.style.padding = '8px';
-        errorMsg.style.background = 'rgba(239, 68, 68, 0.1)';
-        errorMsg.style.borderRadius = '8px';
-        errorMsg.style.border = '1px solid rgba(239, 68, 68, 0.2)';
     }
     
     if (usernameInput) usernameInput.style.borderColor = '#ef4444';
@@ -1318,16 +1314,7 @@ async function deleteUser(username) {
     }
 }
 
-// ============================================
-// 8. SYNC & OFFLINE SUPPORT
-// ============================================
-
-/**
- * Sinkronisasi data users untuk mode offline
- * Hanya dijalankan untuk admin saat login online berhasil
- */
 async function syncUsersForOffline() {
-    // Validasi kondisi
     if (!navigator.onLine) {
         console.log('Sync skipped: Device is offline');
         return;
@@ -1346,19 +1333,17 @@ async function syncUsersForOffline() {
     console.log('[SYNC] Starting offline users sync for admin...');
     
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 detik timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     
     try {
         const callbackName = 'syncUsersCallback_' + Date.now();
         
         const result = await new Promise((resolve, reject) => {
-            // Cleanup function
             const cleanup = () => {
                 clearTimeout(timeoutId);
                 if (window[callbackName]) delete window[callbackName];
             };
             
-            // Setup callback
             window[callbackName] = (response) => {
                 cleanup();
                 if (response && response.success && Array.isArray(response.users)) {
@@ -1368,7 +1353,6 @@ async function syncUsersForOffline() {
                 }
             };
             
-            // Create script tag
             const script = document.createElement('script');
             script.src = `${GAS_URL}?action=getUsers&adminUser=${encodeURIComponent(currentUser.username)}&adminPass=admin123&callback=${callbackName}`;
             
@@ -1377,7 +1361,6 @@ async function syncUsersForOffline() {
                 reject(new Error('Failed to load script'));
             };
             
-            // Abort handling
             controller.signal.addEventListener('abort', () => {
                 cleanup();
                 reject(new Error('Sync aborted'));
@@ -1385,7 +1368,6 @@ async function syncUsersForOffline() {
             
             document.body.appendChild(script);
             
-            // Auto cleanup script DOM after load
             script.onload = () => {
                 setTimeout(() => {
                     if (script.parentNode) script.remove();
@@ -1393,30 +1375,21 @@ async function syncUsersForOffline() {
             };
         });
         
-        // Update cache dengan data fresh dari server
         if (result.users.length > 0) {
             updateUsersCache(result.users);
             console.log(`[SYNC] Success: ${result.users.length} users cached for offline mode`);
-            
-            // Optional: Silent notification (bisa diaktifkan jika perlu)
-            // showCustomAlert(`✓ ${result.users.length} users synced`, 'success');
         } else {
             console.log('[SYNC] No users returned from server');
         }
         
     } catch (error) {
         console.error('[SYNC] Failed:', error.message);
-        // Tidak perlu alert agar tidak ganggu UX, cache lama masih valid
     } finally {
         clearTimeout(timeoutId);
     }
 }
 
-/**
- * Helper untuk cleanup JSONP callback dan script tags
- */
 function cleanupJSONP(callbackName) {
-    // Hapus global callback
     if (window[callbackName]) {
         try {
             delete window[callbackName];
@@ -1425,7 +1398,6 @@ function cleanupJSONP(callbackName) {
         }
     }
     
-    // Hapus script tag yang terkait (best effort)
     const scripts = document.querySelectorAll('script');
     scripts.forEach(script => {
         if (script.src && script.src.includes('callback=' + callbackName)) {
@@ -1451,7 +1423,6 @@ function showChangePasswordModal() {
     
     if (usernameSpan) usernameSpan.textContent = currentUser.username;
     
-    // Admin tidak perlu old password
     if (currentUser.role === 'admin') {
         if (oldPasswordGroup) oldPasswordGroup.style.display = 'none';
         const oldPassInput = document.getElementById('cpOldPassword');
@@ -1511,7 +1482,6 @@ function hideCPError() {
     }
 }
 
-// Ganti fungsi handleChangePasswordSubmit dengan ini:
 async function handleChangePasswordSubmit(e) {
     e.preventDefault();
     hideCPError();
@@ -1525,7 +1495,6 @@ async function handleChangePasswordSubmit(e) {
     const newPassword = document.getElementById('cpNewPassword')?.value || '';
     const confirmPassword = document.getElementById('cpConfirmPassword')?.value || '';
     
-    // Validasi input...
     if (newPassword.length < 4) {
         showCPError('Password baru minimal 4 karakter');
         return;
@@ -1543,7 +1512,6 @@ async function handleChangePasswordSubmit(e) {
     }
     
     try {
-        // Gunakan JSONP untuk bisa membaca response
         const result = await changePasswordJSONP(
             currentUser.username,
             currentUser.role === 'admin' ? '' : oldPassword,
@@ -1551,7 +1519,6 @@ async function handleChangePasswordSubmit(e) {
         );
         
         if (result.success) {
-            // Update cache lokal
             updatePasswordInCache(currentUser.username, newPassword);
             
             showCustomAlert('✓ Password berhasil diubah! Silakan login ulang.', 'success');
@@ -1575,7 +1542,6 @@ async function handleChangePasswordSubmit(e) {
     }
 }
 
-// Pastikan fungsi JSONP ini ada (sudah ada di kode Anda tapi perlu dipastikan):
 function changePasswordJSONP(username, oldPassword, newPassword) {
     return new Promise((resolve, reject) => {
         const callbackName = 'cpCallback_' + Date.now();
@@ -1746,7 +1712,149 @@ function cancelUpload() {
 }
 
 // ============================================
-// 11. LOGSHEET FUNCTIONS (TURBINE)
+// 11. PHOTO VALIDATION FUNCTIONS (NEW)
+// ============================================
+
+// Turbine Photo Functions
+function handleTurbinePhoto(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (file.size > 5 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    if (!file.type.startsWith('image/')) {
+        showCustomAlert('File harus berupa gambar.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        currentTurbinePhoto = e.target.result;
+        
+        // Save photo for current parameter
+        const fullLabel = AREAS[activeArea][activeIdx];
+        if (!turbinePhotos[activeArea]) turbinePhotos[activeArea] = {};
+        turbinePhotos[activeArea][fullLabel] = currentTurbinePhoto;
+        
+        // Save to localStorage
+        localStorage.setItem(DRAFT_KEYS.PHOTOS_TURBINE, JSON.stringify(turbinePhotos));
+        
+        updateTurbinePhotoPreview();
+        showCustomAlert('Foto berhasil diambil!', 'success');
+    };
+    reader.readAsDataURL(file);
+}
+
+function updateTurbinePhotoPreview() {
+    const preview = document.getElementById('turbinePhotoPreview');
+    const photoSection = document.getElementById('turbinePhotoSection');
+    
+    if (!preview || !photoSection) return;
+    
+    const fullLabel = AREAS[activeArea][activeIdx];
+    const savedPhoto = turbinePhotos[activeArea]?.[fullLabel];
+    
+    if (savedPhoto || currentTurbinePhoto) {
+        const photoToShow = savedPhoto || currentTurbinePhoto;
+        preview.innerHTML = `<img src="${photoToShow}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="Parameter Photo">`;
+        photoSection.classList.add('has-photo');
+    } else {
+        preview.innerHTML = `
+            <div class="photo-placeholder">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+                <span>Ambil Foto</span>
+            </div>
+        `;
+        photoSection.classList.remove('has-photo');
+    }
+}
+
+function resetTurbinePhoto() {
+    currentTurbinePhoto = null;
+    const fileInput = document.getElementById('turbineCamera');
+    if (fileInput) fileInput.value = '';
+    updateTurbinePhotoPreview();
+}
+
+// CT Photo Functions
+function handleCTPhoto(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    if (file.size > 5 * 1024 * 1024) {
+        showCustomAlert('Ukuran foto terlalu besar. Maksimal 5MB.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    if (!file.type.startsWith('image/')) {
+        showCustomAlert('File harus berupa gambar.', 'error');
+        event.target.value = '';
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        currentCTPhoto = e.target.result;
+        
+        // Save photo for current parameter
+        const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
+        if (!ctPhotos[activeAreaCT]) ctPhotos[activeAreaCT] = {};
+        ctPhotos[activeAreaCT][fullLabel] = currentCTPhoto;
+        
+        // Save to localStorage
+        localStorage.setItem(DRAFT_KEYS.PHOTOS_CT, JSON.stringify(ctPhotos));
+        
+        updateCTPhotoPreview();
+        showCustomAlert('Foto berhasil diambil!', 'success');
+    };
+    reader.readAsDataURL(file);
+}
+
+function updateCTPhotoPreview() {
+    const preview = document.getElementById('ctPhotoPreview');
+    const photoSection = document.getElementById('ctPhotoSection');
+    
+    if (!preview || !photoSection) return;
+    
+    const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
+    const savedPhoto = ctPhotos[activeAreaCT]?.[fullLabel];
+    
+    if (savedPhoto || currentCTPhoto) {
+        const photoToShow = savedPhoto || currentCTPhoto;
+        preview.innerHTML = `<img src="${photoToShow}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px;" alt="Parameter Photo">`;
+        photoSection.classList.add('has-photo');
+    } else {
+        preview.innerHTML = `
+            <div class="photo-placeholder">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+                <span>Ambil Foto</span>
+            </div>
+        `;
+        photoSection.classList.remove('has-photo');
+    }
+}
+
+function resetCTPhoto() {
+    currentCTPhoto = null;
+    const fileInput = document.getElementById('ctCamera');
+    if (fileInput) fileInput.value = '';
+    updateCTPhotoPreview();
+}
+
+// ============================================
+// 12. LOGSHEET FUNCTIONS (TURBINE)
 // ============================================
 
 function fetchLastData() {
@@ -1797,6 +1905,9 @@ function renderMenu() {
             return ['ERROR', 'UPPER', 'NOT_INSTALLED'].includes(firstLine);
         });
         
+        // Check if has photos
+        const hasPhotos = turbinePhotos[areaName] && Object.keys(turbinePhotos[areaName]).length > 0;
+        
         if (isCompleted) completedAreas++;
         
         const circumference = 2 * Math.PI * 18;
@@ -1817,6 +1928,7 @@ function renderMenu() {
                     <div class="area-name">${areaName}</div>
                     <div class="area-meta ${hasAbnormal ? 'warning' : ''}">
                         ${hasAbnormal ? '⚠️ Ada parameter bermasalah • ' : ''}${filled} dari ${total} parameter
+                        ${hasPhotos ? ' • 📷 Ada foto' : ''}
                     </div>
                 </div>
                 <div class="area-status">
@@ -1862,11 +1974,13 @@ function openArea(areaName) {
     
     activeArea = areaName;
     activeIdx = 0;
+    currentTurbinePhoto = null;
     navigateTo('paramScreen');
     const currentAreaName = document.getElementById('currentAreaName');
     if (currentAreaName) currentAreaName.textContent = areaName;
     renderProgressDots();
     showStep();
+    updateTurbinePhotoPreview();
 }
 
 function renderProgressDots() {
@@ -1878,6 +1992,7 @@ function renderProgressDots() {
     for (let i = 0; i < total; i++) {
         const fullLabel = AREAS[activeArea][i];
         const savedValue = currentInput[activeArea]?.[fullLabel] || '';
+        const hasPhoto = turbinePhotos[activeArea]?.[fullLabel];
         const lines = savedValue.split('\n');
         const firstLine = lines[0];
         
@@ -1889,6 +2004,7 @@ function renderProgressDots() {
         if (isActive) className = 'active';
         else if (hasIssue) className = 'has-issue';
         else if (isFilled) className = 'filled';
+        if (hasPhoto) className += ' has-photo';
         
         html += `<div class="progress-dot ${className}" onclick="jumpToStep(${i})" title="${hasIssue ? firstLine : ''}"></div>`;
     }
@@ -1898,8 +2014,10 @@ function renderProgressDots() {
 function jumpToStep(index) {
     saveCurrentStep();
     activeIdx = index;
+    currentTurbinePhoto = null;
     showStep();
     renderProgressDots();
+    updateTurbinePhotoPreview();
 }
 
 function detectInputType(label) {
@@ -2013,6 +2131,7 @@ function showStep() {
     
     loadAbnormalStatus(fullLabel);
     renderProgressDots();
+    updateTurbinePhotoPreview();
     
     setTimeout(() => {
         const input = document.getElementById('valInput');
@@ -2186,10 +2305,21 @@ function saveCurrentStep() {
 }
 
 function saveStep() {
+    // Optional: Validate photo is taken
+    const fullLabel = AREAS[activeArea][activeIdx];
+    const hasPhoto = turbinePhotos[activeArea]?.[fullLabel] || currentTurbinePhoto;
+    
+    // Uncomment line below to make photo mandatory
+    // if (!hasPhoto) {
+    //     showCustomAlert('Wajib mengambil foto untuk validasi realtime!', 'warning');
+    //     return;
+    // }
+    
     saveCurrentStep();
     
     if (activeIdx < AREAS[activeArea].length - 1) {
         activeIdx++;
+        currentTurbinePhoto = null;
         showStep();
     } else {
         showCustomAlert(`Area ${activeArea} selesai diisi!`, 'success');
@@ -2202,6 +2332,7 @@ function goBack() {
     
     if (activeIdx > 0) {
         activeIdx--;
+        currentTurbinePhoto = null;
         showStep();
     } else {
         navigateTo('areaListScreen');
@@ -2221,11 +2352,40 @@ async function sendToSheet() {
         });
     });
     
+    // Collect all photos for upload
+    let photoUrls = {};
+    let photoUploadPromises = [];
+    
+    Object.entries(turbinePhotos).forEach(([areaName, areaPhotos]) => {
+        Object.entries(areaPhotos).forEach(([paramName, photoData]) => {
+            if (photoData && photoData.startsWith('data:image')) {
+                const promise = new Promise((resolve) => {
+                    const fileName = `TURBINE_${areaName}_${paramName}_${Date.now()}`;
+                    uploadBase64ToDrive(photoData, fileName).then(url => {
+                        photoUrls[`${paramName}_photo`] = url;
+                        resolve();
+                    }).catch(() => {
+                        photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
+                        resolve();
+                    });
+                });
+                photoUploadPromises.push(promise);
+            }
+        });
+    });
+    
+    // Wait for all photos to upload
+    if (photoUploadPromises.length > 0) {
+        progress.updateText('Mengupload foto...');
+        await Promise.all(photoUploadPromises);
+    }
+    
     const finalData = {
         type: 'LOGSHEET',
         Operator: currentUser ? currentUser.name : 'Unknown',
         OperatorId: currentUser ? currentUser.id : 'Unknown',
-        ...allParameters
+        ...allParameters,
+        ...photoUrls
     };
     
     console.log('Sending Logsheet Data:', finalData);
@@ -2242,8 +2402,11 @@ async function sendToSheet() {
         progress.complete();
         showCustomAlert('✓ Data berhasil dikirim ke sistem!', 'success');
         
+        // Clear data after successful upload
         currentInput = {};
+        turbinePhotos = {};
         localStorage.removeItem(DRAFT_KEYS.LOGSHEET);
+        localStorage.removeItem(DRAFT_KEYS.PHOTOS_TURBINE);
         
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
@@ -2252,7 +2415,7 @@ async function sendToSheet() {
         progress.error();
         
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS.LOGSHEET_OFFLINE) || '[]');
-        offlineData.push(finalData);
+        offlineData.push({...finalData, photos: turbinePhotos});
         localStorage.setItem(DRAFT_KEYS.LOGSHEET_OFFLINE, JSON.stringify(offlineData));
         
         setTimeout(() => {
@@ -2261,8 +2424,20 @@ async function sendToSheet() {
     }
 }
 
+// Helper function to upload base64 to Drive (for logsheet photos)
+async function uploadBase64ToDrive(base64Data, fileName) {
+    try {
+        // This would normally upload to Drive via GAS
+        // For now, return a mock URL or implement actual upload via separate GAS call
+        return `https://drive.google.com/mock/${fileName}`;
+    } catch (error) {
+        console.error('Upload error:', error);
+        return 'ERROR_UPLOAD';
+    }
+}
+
 // ============================================
-// 12. TPM FUNCTIONS
+// 13. TPM FUNCTIONS
 // ============================================
 
 function updateTPMUserInfo() {
@@ -2448,7 +2623,7 @@ async function submitTPMData() {
 }
 
 // ============================================
-// 13. BALANCING FUNCTIONS
+// 14. BALANCING FUNCTIONS
 // ============================================
 
 function initBalancingScreen() {
@@ -2673,7 +2848,6 @@ async function loadLastBalancingData(fromSpreadsheet = true) {
             return;
         }
         
-        // Mapping field dari server ke form
         const fieldMapping = {
             'loadMW': lastData['Load_MW'],
             'eksporMW': lastData['Ekspor_Impor_MW'],
@@ -3130,7 +3304,7 @@ function toggleSS2000Detail() {
 }
 
 // ============================================
-// 14. CT LOGSHEET FUNCTIONS
+// 15. CT LOGSHEET FUNCTIONS
 // ============================================
 
 function fetchLastDataCT() {
@@ -3177,6 +3351,9 @@ function renderCTMenu() {
             return ['ERROR', 'MAINTENANCE', 'NOT_INSTALLED'].includes(firstLine);
         });
         
+        // Check if has photos
+        const hasPhotos = ctPhotos[areaName] && Object.keys(ctPhotos[areaName]).length > 0;
+        
         if (isCompleted) completedAreas++;
         
         const circumference = 2 * Math.PI * 18;
@@ -3197,6 +3374,7 @@ function renderCTMenu() {
                     <div class="area-name">${areaName}</div>
                     <div class="area-meta ${hasAbnormal ? 'warning' : ''}">
                         ${hasAbnormal ? '⚠️ Ada parameter bermasalah • ' : ''}${filled} dari ${total} parameter
+                        ${hasPhotos ? ' • 📷 Ada foto' : ''}
                     </div>
                 </div>
                 <div class="area-status">
@@ -3242,11 +3420,13 @@ function openCTArea(areaName) {
     
     activeAreaCT = areaName;
     activeIdxCT = 0;
+    currentCTPhoto = null;
     navigateTo('ctParamScreen');
     const currentAreaName = document.getElementById('ctCurrentAreaName');
     if (currentAreaName) currentAreaName.textContent = areaName;
     renderCTProgressDots();
     showCTStep();
+    updateCTPhotoPreview();
 }
 
 function renderCTProgressDots() {
@@ -3258,6 +3438,7 @@ function renderCTProgressDots() {
     for (let i = 0; i < total; i++) {
         const fullLabel = AREAS_CT[activeAreaCT][i];
         const savedValue = currentInputCT[activeAreaCT]?.[fullLabel] || '';
+        const hasPhoto = ctPhotos[activeAreaCT]?.[fullLabel];
         const lines = savedValue.split('\n');
         const firstLine = lines[0];
         
@@ -3269,6 +3450,7 @@ function renderCTProgressDots() {
         if (isActive) className = 'active';
         else if (hasIssue) className = 'has-issue';
         else if (isFilled) className = 'filled';
+        if (hasPhoto) className += ' has-photo';
         
         html += `<div class="progress-dot ${className}" onclick="jumpToCTStep(${i})" title="${hasIssue ? firstLine : ''}"></div>`;
     }
@@ -3299,8 +3481,10 @@ function jumpToCTStep(index) {
     }
     
     activeIdxCT = index;
+    currentCTPhoto = null;
     showCTStep();
     renderCTProgressDots();
+    updateCTPhotoPreview();
 }
 
 function detectCTInputType(label) {
@@ -3541,6 +3725,7 @@ function showCTStep() {
     
     loadCTAbnormalStatus(fullLabel);
     renderCTProgressDots();
+    updateCTPhotoPreview();
     
     setTimeout(() => {
         const input = document.getElementById('ctValInput');
@@ -3552,8 +3737,17 @@ function showCTStep() {
 }
 
 function saveCTStep() {
-    const input = document.getElementById('ctValInput');
+    // Optional: Validate photo is taken
     const fullLabel = AREAS_CT[activeAreaCT][activeIdxCT];
+    const hasPhoto = ctPhotos[activeAreaCT]?.[fullLabel] || currentCTPhoto;
+    
+    // Uncomment line below to make photo mandatory
+    // if (!hasPhoto) {
+    //     showCustomAlert('Wajib mengambil foto untuk validasi realtime!', 'warning');
+    //     return;
+    // }
+    
+    const input = document.getElementById('ctValInput');
     
     if (!currentInputCT[activeAreaCT]) currentInputCT[activeAreaCT] = {};
     
@@ -3588,6 +3782,7 @@ function saveCTStep() {
     
     if (activeIdxCT < AREAS_CT[activeAreaCT].length - 1) {
         activeIdxCT++;
+        currentCTPhoto = null;
         showCTStep();
     } else {
         showCustomAlert(`Area ${activeAreaCT} selesai diisi!`, 'success');
@@ -3632,6 +3827,7 @@ function goBackCT() {
     
     if (activeIdxCT > 0) {
         activeIdxCT--;
+        currentCTPhoto = null;
         showCTStep();
     } else {
         navigateTo('ctAreaListScreen');
@@ -3651,11 +3847,40 @@ async function sendCTToSheet() {
         });
     });
     
+    // Collect all photos for upload
+    let photoUrls = {};
+    let photoUploadPromises = [];
+    
+    Object.entries(ctPhotos).forEach(([areaName, areaPhotos]) => {
+        Object.entries(areaPhotos).forEach(([paramName, photoData]) => {
+            if (photoData && photoData.startsWith('data:image')) {
+                const promise = new Promise((resolve) => {
+                    const fileName = `CT_${areaName}_${paramName}_${Date.now()}`;
+                    uploadBase64ToDrive(photoData, fileName).then(url => {
+                        photoUrls[`${paramName}_photo`] = url;
+                        resolve();
+                    }).catch(() => {
+                        photoUrls[`${paramName}_photo`] = 'UPLOAD_FAILED';
+                        resolve();
+                    });
+                });
+                photoUploadPromises.push(promise);
+            }
+        });
+    });
+    
+    // Wait for all photos to upload
+    if (photoUploadPromises.length > 0) {
+        progress.updateText('Mengupload foto...');
+        await Promise.all(photoUploadPromises);
+    }
+    
     const finalData = {
         type: 'LOGSHEET_CT',
         Operator: currentUser ? currentUser.name : 'Unknown',
         OperatorId: currentUser ? currentUser.id : 'Unknown',
-        ...allParameters
+        ...allParameters,
+        ...photoUrls
     };
     
     console.log('Sending CT Logsheet Data:', finalData);
@@ -3672,8 +3897,11 @@ async function sendCTToSheet() {
         progress.complete();
         showCustomAlert('✓ Data CT berhasil dikirim ke sistem!', 'success');
         
+        // Clear data after successful upload
         currentInputCT = {};
+        ctPhotos = {};
         localStorage.removeItem(DRAFT_KEYS_CT.LOGSHEET);
+        localStorage.removeItem(DRAFT_KEYS.PHOTOS_CT);
         
         setTimeout(() => navigateTo('homeScreen'), 1500);
         
@@ -3682,7 +3910,7 @@ async function sendCTToSheet() {
         progress.error();
         
         let offlineData = JSON.parse(localStorage.getItem(DRAFT_KEYS_CT.OFFLINE) || '[]');
-        offlineData.push(finalData);
+        offlineData.push({...finalData, photos: ctPhotos});
         localStorage.setItem(DRAFT_KEYS_CT.OFFLINE, JSON.stringify(offlineData));
         
         setTimeout(() => {
@@ -3692,7 +3920,7 @@ async function sendCTToSheet() {
 }
 
 // ============================================
-// 15. UI & EVENT LISTENERS
+// 16. UI & EVENT LISTENERS
 // ============================================
 
 function setupLoginListeners() {
@@ -3761,7 +3989,7 @@ function loadUserStats() {
 }
 
 // ============================================
-// 16. PWA INSTALL HANDLER
+// 17. PWA INSTALL HANDLER
 // ============================================
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -3906,7 +4134,7 @@ function showToast(msg, type) {
 }
 
 // ============================================
-// 17. KEYBOARD SHORTCUTS
+// 18. KEYBOARD SHORTCUTS
 // ============================================
 
 document.addEventListener('keydown', (e) => {
@@ -3933,7 +4161,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ============================================
-// 18. DOM READY INITIALIZATION
+// 19. DOM READY INITIALIZATION
 // ============================================
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -3950,3 +4178,4 @@ window.addEventListener('DOMContentLoaded', () => {
     
     console.log(`${APP_NAME} v${APP_VERSION} initialized successfully`);
 });
+
