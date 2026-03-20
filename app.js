@@ -6,7 +6,7 @@
 // ============================================
 // 1. KONFIGURASI & KONSTANTA
 // ============================================
-const APP_VERSION = '1.5.6';
+const APP_VERSION = '1.5.7';
 const APP_NAME = 'Turbine Logsheet Pro';
 
 const AUTH_CONFIG = {
@@ -34,7 +34,7 @@ const DRAFT_KEYS_CT = {
 };
 
 // URL Google Apps Script Backend
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzJywfMZilYlYiQKc31PEFY8NKFCCpiO01vHytDniHdwMHTBwmzO6-U70MAWLiXLnyI/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz40EMIKbAb2mtQHwiG5YAU7JJDnW1XAVbuVBDtzEXTk1lAheO6Sr7g-I1OrQLL1hps/exec";
 
 // Fallback users untuk mode offline (legacy support)
 const OFFLINE_USERS = {
